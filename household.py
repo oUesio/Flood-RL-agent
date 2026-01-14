@@ -61,17 +61,17 @@ LOW_INCOME_RISK = {0: 0.0, 1: 0.5}
 
 HOME_INSURE_RISK = {0: 0.4, 1: 0.0}
 
-HEALTH_INSURE_RISK = {0: 0.4, 1: 0.0}
+HEALTH_INSURE_RISK = {0: 0.2, 1: 0.0}
 
 WEIGHTS = {
     "tenure_risk": 0.12,
     "acco_risk": 0.08,
     "size_risk": 0.08,
     "internet_risk": 0.08,
-    "deprivation_risk": 0.30,
-    "low_income_risk": 0.18,
+    "deprivation_risk": 0.36,
+    "low_income_risk": 0.16,
     "home_insure_risk": 0.08,
-    "health_insure_risk": 0.08,
+    "health_insure_risk": 0.04,
 }
 
 # ======================
@@ -106,16 +106,6 @@ def sample_from_csv(
             df = df[df[col] == val]
     return sample_categorical_census(df, category_col, value_col, ignore_categories or [])
 
-def map_proficiency(category: str) -> str | None:
-    if category in [
-        "Main language is English (English or Welsh in Wales)",
-        "Main language is not English (English or Welsh in Wales): Can speak English very well or well"
-    ]:
-        return "Good English Proficiency"
-    elif category == "Main language is not English (English or Welsh in Wales): Cannot speak English or cannot speak English well":
-        return "Bad English Proficiency"
-    return None
-
 def calculate_household_risk(
     tenure_sample, acco_sample, size_sample, internet_sample, deprivation_sample, 
     low_income_sample, home_insure_sample, health_insure_sample
@@ -140,7 +130,26 @@ def calculate_household_risk(
         WEIGHTS["health_insure_risk"] * health_insure_risk
     )
 
-    noise = np.random.normal(0, 0.03)
+    noise = np.random.normal(0, 0.01)
+
+    '''print(
+    f"""
+    HOUSEHOLD RISK BREAKDOWN
+    -----------------------
+    Tenure risk           : value={tenure_risk:.2f}, weight={WEIGHTS['tenure_risk']:.2f}, contrib={tenure_risk * WEIGHTS['tenure_risk']:.3f}
+    Accommodation risk    : value={acco_risk:.2f}, weight={WEIGHTS['acco_risk']:.2f}, contrib={acco_risk * WEIGHTS['acco_risk']:.3f}
+    Household size risk   : value={size_risk:.2f}, weight={WEIGHTS['size_risk']:.2f}, contrib={size_risk * WEIGHTS['size_risk']:.3f}
+    Internet access risk  : value={internet_risk:.2f}, weight={WEIGHTS['internet_risk']:.2f}, contrib={internet_risk * WEIGHTS['internet_risk']:.3f}
+    Deprivation risk      : value={deprivation_risk:.2f}, weight={WEIGHTS['deprivation_risk']:.2f}, contrib={deprivation_risk * WEIGHTS['deprivation_risk']:.3f}
+    Low income risk       : value={low_income_risk:.2f}, weight={WEIGHTS['low_income_risk']:.2f}, contrib={low_income_risk * WEIGHTS['low_income_risk']:.3f}
+    Home insurance risk   : value={home_insure_risk:.2f}, weight={WEIGHTS['home_insure_risk']:.2f}, contrib={home_insure_risk * WEIGHTS['home_insure_risk']:.3f}
+    Health insurance risk : value={health_insure_risk:.2f}, weight={WEIGHTS['health_insure_risk']:.2f}, contrib={health_insure_risk * WEIGHTS['health_insure_risk']:.3f}
+
+    BASE RISK SCORE (no noise): {risk_score:.3f}
+    FINAL RISK SCORE (with noise): {np.clip(risk_score + noise, 0, 1):.3f}
+    """
+    )'''
+    
     return np.clip(risk_score + noise, 0, 1)
 
 # ======================
@@ -205,7 +214,7 @@ def generate_household_samples(num_households: int) -> list[float]:
             "L15: Full-time students": 0.35,
             "Does not apply": 0.00
         }
-        income_sample *= NSSEC[nssec_sample]
+        income_sample *= NSSEC[nssec_sample] # scale for the low income sample
 
         median_income = income_df['Total annual income (£)'].median()
         low_income_sample = int(income_sample < 0.6 * median_income)
@@ -285,6 +294,33 @@ def generate_household_samples(num_households: int) -> list[float]:
         home_insure_sample = np.random.binomial(1, 0.75)
         health_insure_sample = np.random.binomial(1, 0.14)
 
+        '''print('========')
+        print('Age: ',age_sample)
+        print('Highest qual: ',qual_sample)
+        print('Accomodation: ',acco_type_sample)
+        print('Household size: ',house_size_sample)
+        print('Economic activity status: ',eas_sample)
+        print('Ns-sec: ',nssec_sample)
+        print('Income: ',income_sample)
+        print('Low income flag: ',low_income_sample)
+
+        print('Adults employed: ',num_adults_sample)
+        print('Disabled: ',num_disable_sample)
+        print('Long-term health: ',num_long_sample)
+        print('Deprived education: ',dep_edu_sample)
+        print('Deprived employment: ',dep_employ_sample)
+        print('Deprived health: ',dep_health_sample)
+        print('Deprived housing: ',dep_housing_sample)
+        print('Overall deprived: ',household_dep_sample)
+
+        print('People per room: ',num_people_sample)
+        print('Occupancy rating: ',num_occupancy_sample)
+
+        print('Tenure: ',tenure_sample)
+        print('Internet flag: ',internet_sample)
+        print('Home insurance: ',home_insure_sample)
+        print('Health insurance: ',health_insure_sample)'''
+        
         # -------------------------
         # Household risk score
         # -------------------------
@@ -295,8 +331,23 @@ def generate_household_samples(num_households: int) -> list[float]:
 
         risk_scores.append(household_risk)
 
+        '''print(household_risk)
+        print('========')'''
+
     return risk_scores
 
-np.random.seed(42)
-risk_scores = generate_household_samples(100)
-print(risk_scores)
+#np.random.seed(42)
+for x in range(3):
+    risk_scores = generate_household_samples(1000)
+    print(risk_scores)
+
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.hist(risk_scores, bins=20)
+    plt.xlabel("Value")
+    plt.ylabel("Frequency")
+    plt.title("Histogram of Values")
+
+    # Save to file
+    plt.savefig(f"temp_{x}.png", dpi=300, bbox_inches="tight")
+    plt.close()
