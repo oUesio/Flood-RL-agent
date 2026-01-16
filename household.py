@@ -155,7 +155,6 @@ def calculate_household_risk(
 # ======================
 # Load all CSVs once
 # ======================
-dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
 
 def generate_household_samples(num_households: int) -> list[float]:
     """
@@ -163,6 +162,7 @@ def generate_household_samples(num_households: int) -> list[float]:
     Returns a list of risk scores.
     """
     risk_scores = []
+    dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
 
     for _ in range(num_households):
         # -------------------------
