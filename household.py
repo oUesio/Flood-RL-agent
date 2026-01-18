@@ -161,14 +161,33 @@ def generate_household_samples(num_households: int) -> list[float]:
     Generate household samples and compute a household risk score for each.
     Returns a list of risk scores.
     """
-    risk_scores = []
+    #risk_scores = []
+    total_risk = 0
     dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
+    observed = {
+        "disable_a": 0,
+        "disable_b": 0,
+        "elderly_a": 0,
+        "elderly_b": 0,
+        "child_a": 0,
+        "child_b": 0,
+        "health_a": 0,
+        "health_b": 0,
+    }
 
     for _ in range(num_households):
         # -------------------------
         # General household categorical variables
         # -------------------------
         age_sample = sample_from_csv(FILE_PATHS["age"], 'Age (6 categories)')
+        if age_sample == 'Aged 65 years and over':
+            observed['elderly_a'] += 1 # is elderly
+        else:
+            observed['elderly_b'] += 1 # is not elderly
+        if age_sample == 'Aged 15 years and under':
+            observed['child_a'] += 1 # is child
+        else:
+            observed['child_b'] += 1 # is not child
 
         qual_sample = sample_from_csv(FILE_PATHS["qualification"],
                                       'Highest level of qualification (7 categories)',
@@ -231,6 +250,12 @@ def generate_household_samples(num_households: int) -> list[float]:
                                              'Number of disabled people in household (4 categories)',
                                              filters={'Household size (5 categories)': house_size_sample},
                                              ignore_categories=['Does not apply'])
+        if '1' in num_disable_sample:
+            observed['disable_a'] += 1 # 1 disabed
+        elif '2' in num_disable_sample:
+            observed['disable_a'] += 2 # 2 disabled
+        elif 'No people' in num_disable_sample:
+            observed['disable_b'] += 1 # No disabled
 
         num_long_sample = sample_from_csv(FILE_PATHS["household_longterm"],
                                           'Number of people in household with a long-term heath condition but are not disabled (4 categories)',
@@ -251,6 +276,12 @@ def generate_household_samples(num_households: int) -> list[float]:
                                             'Household deprived in the health and disability dimension (3 categories)',
                                             filters={'Number of people in household with a long-term heath condition but are not disabled (4 categories)': num_long_sample,
                                                      'Number of disabled people in household (4 categories)': num_disable_sample})
+        if 'is not deprived' in dep_health_sample:
+            observed['health_a'] += 1 # Good health
+        elif 'is deprived' in dep_health_sample:
+            observed['health_b'] += 1 # Bad health
+
+        
 
         # -------------------------
         # Housing and occupancy
@@ -328,17 +359,17 @@ def generate_household_samples(num_households: int) -> list[float]:
             tenure_sample, acco_type_sample, house_size_sample, internet_sample,
             household_dep_sample, low_income_sample, home_insure_sample, health_insure_sample
         )
-
-        risk_scores.append(household_risk)
+        #risk_scores.append(household_risk)
+        total_risk += household_risk
 
         '''print(household_risk)
         print('========')'''
+    print(observed)
+    return total_risk / num_households, observed
 
-    return risk_scores
-
-#np.random.seed(42)
+'''#np.random.seed(42)
 for x in range(3):
-    risk_scores = generate_household_samples(1000)
+    risk_scores, observed = generate_household_samples(1000)
     print(risk_scores)
 
     import matplotlib.pyplot as plt
@@ -350,4 +381,7 @@ for x in range(3):
 
     # Save to file
     plt.savefig(f"temp_{x}.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    plt.close()'''
+
+risk_score, observed = generate_household_samples(1000)
+print(risk_score, observed)

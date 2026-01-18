@@ -92,7 +92,6 @@ def map_proficiency(category):
         return None
 
 def generate_feature_samples():
-
     samples = {}
     dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
     gdf_grid = gpd.read_file(GRID)
