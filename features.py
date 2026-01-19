@@ -3,6 +3,7 @@ import numpy as np
 import geopandas as gpd
 from scipy.stats import lognorm, skewnorm, truncnorm
 import random
+from datetime import datetime
 
 FILE_PATHS = {
     "urban": "data/urban_rural.csv",
@@ -70,13 +71,32 @@ def sample_beta(df, category_col, a, b, value_col):
     return np.random.beta(alpha, beta, size=1)[0]
 
 
-def sample_cell_with_noise(gdf, features, noise_scale=0.05):
+def sample_cell_with_noise(gdf, noise_scale=0.05):
+    features = [
+        "water_dens", # more water = more risk (more water)
+        "water_dist", # shorter distance = more risk (closer to river increases exposure)
+        "risk_score", # more risk = more risk
+        "elevation", # lower elevation = more risk (water flows downhill)
+        "impervious", # more impervious = more risk (less infiltration, more runoff)
+        "historic", # flag
+        "road_dens", # less roads = more risk (better access, but less roads means less impervious)
+        "road_dist", # longer distance = more risk (harder access to evac)
+        "hospital", # longer distance = more risk (slower emergency response)
+    ]
     row = gdf.sample(1).iloc[0]
     sample = {}
     for f in features:
         val = row[f]
-        noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
-        sample[f] = max(val + noise, 0)
+        if f == "historic":
+            sample["historic"] = val
+        else:
+            noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
+            s = max(val + noise, 0)
+            mean = gdf[f].mean()
+            if f in ["impervious", "water_dens", "road_dist", "hospital", "risk_score",]:
+                sample[f+'_ratio'] = s / mean 
+            else:
+                sample[f+'_ratio'] = mean / s 
     sample["geometry"] = row.geometry
     return sample
 
@@ -95,7 +115,7 @@ def generate_feature_samples():
     samples = {}
     dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
     gdf_grid = gpd.read_file(GRID)
-
+    
     # Urban/Rural
     urban = dfs["urban"]
     probs = urban["Urban_rural_flag"].value_counts(normalize=True)
@@ -112,8 +132,9 @@ def generate_feature_samples():
 
     log_popden = np.log(popden_total)
     mu, sigma = log_popden.mean(), log_popden.std()
-
-    samples["population_density"] = np.random.lognormal(mu, sigma)
+    popden_mean = popden_total.mean()
+    popden_sample = np.random.lognormal(mu, sigma)
+    samples["population_density_ratio"] = popden_sample / popden_mean
 
     # Mean property value
     property_df = dfs["property_value"]
@@ -123,7 +144,7 @@ def generate_feature_samples():
     log_price = np.log(property_df["price"])
     shape, loc, scale = skewnorm.fit(log_price)
 
-    samples["property_value"] = np.exp(skewnorm.rvs(shape, loc=loc, scale=scale, size=1)[0])
+    samples["property_value_ratio"] = property_df["price"].mean() / np.exp(skewnorm.rvs(shape, loc=loc, scale=scale, size=1)[0]) # lower property value = more susceptible
 
     # Building age
     building_age = dfs["property_age"]
@@ -133,17 +154,30 @@ def generate_feature_samples():
         "BP_1983_1992","BP_1993_1999","BP_2000_2009","BP_2010_2015"
     ]
     age_totals = building_age[age_columns].sum()
-    age_probs = age_totals / age_totals.sum()
-    age_categories = age_totals.index.to_numpy()
+    year_counts = {}
 
-    building_range = np.random.choice(age_categories, p=age_probs)
+    for col, count in age_totals.items():
+        if col == "BP_PRE_1900":
+            years = range(1850, 1900)
+        else:
+            a, b = map(int, col.split("_")[1:])
+            years = range(a, b + 1)
 
-    if building_range == "BP_PRE_1900":
-        building_year = 1900
-    else:
-        start, end = map(int, building_range.split("_")[1:])
-        building_year = np.random.randint(start, end + 1)
-    samples["building_year"] = building_year
+        for y in years:
+            year_counts[y] = year_counts.get(y, 0) + count / len(years)
+
+    years = np.array(list(year_counts.keys()))
+    counts = np.array(list(year_counts.values()))
+    counts /= counts.sum()
+
+    current_year = datetime.now().year
+    mean_year = np.sum(years * counts)
+    mean_building_age = current_year - mean_year
+    print(mean_building_age)
+    std_year = np.sqrt(np.sum(counts * (years - mean_year)**2))
+    building_age = current_year - int(np.random.normal(loc=mean_year, scale=std_year))
+    print(building_age)
+    samples["building_age_ratio"] = building_age / mean_building_age
 
     # Season
     samples["season"] = random.choice(list(SEASON_MONTHS))
@@ -167,13 +201,14 @@ def generate_feature_samples():
         p=[c2_count / (c2_count + c3_count), c3_count / (c2_count + c3_count)],
     )
 
+    mean_response_time = c2.mean() if category == 'C2' else c3.mean
+
     data = c2 if category == "C2" else c3
     shape, loc, scale = lognorm.fit(data, floc=0)
     response_sample = lognorm.rvs(shape, loc=loc, scale=scale)
 
-    mean_popden = popden_total.mean()
-    factor = 1 + 0.5 * ((samples["population_density"] - mean_popden) / mean_popden)
-    samples["response_time"] = response_sample * factor
+    factor = 1 + 0.5 * ((popden_mean - popden_sample) / popden_mean)
+    samples["response_time_ratio"] = response_sample * factor / mean_response_time # longer delays = more risk
 
     # Ambulance handover delays !!!
     handover = dfs["ambulance_handover"]
@@ -190,9 +225,10 @@ def generate_feature_samples():
     handover_season = handover[handover["Date_parsed"].dt.month.isin(SEASON_MONTHS[samples["season"]])]
 
     counts = handover_season[["Under 15 min", "15–30 min", "30–60 min", "Over 60 min"]].sum()
+    midpoints = np.array([7.5, 22.5, 45, 75])
+    mean_handover = np.sum(counts * midpoints) / counts.sum()
     probs = counts / counts.sum()
-
-    samples["handover_time"] = sample_handover_time(probs)
+    samples["handover_time_ratio"] = sample_handover_time(probs) / mean_handover
 
     # Hospital bed availability 
     beds = dfs["hospital_beds"]
@@ -220,26 +256,15 @@ def generate_feature_samples():
     vehicle = dfs["vehicle"]
     samples["vehicle_rate"] = sample_beta(vehicle, "Car or van availability (3 categories)", "1 or more cars or vans in household", "No cars or vans in household", "Observation")
 
-    # Second address rate
+    '''# Second address rate
     second_add = dfs["second_address"]
     second_add["second_address_combined"] = second_add["Second address indicator (3 categories)"].apply(
         lambda x: "No second address" if x == "No second address" else "Has second address"
     )
-    second_add["second_address_combined"] = sample_beta(second_add, "second_address_combined", "Has second address", "No second address", "Observation")
+    samples["second_address"] = sample_beta(second_add, "second_address_combined", "Has second address", "No second address", "Observation")'''
 
     # Grid
-    grid_features = [
-        "water_dens",
-        "water_dist",
-        "risk_score",
-        "elevation",
-        "impervious",
-        "historic",
-        "road_dens",
-        "road_dist",
-        "hospital",
-    ]
-    samples["grid"] = sample_cell_with_noise(gdf_grid, grid_features)
+    samples["grid"] = sample_cell_with_noise(gdf_grid)
 
     return samples
 

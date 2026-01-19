@@ -174,11 +174,11 @@ def generate_household_samples(num_households: int) -> list[float]:
         "health_a": 0,
         "health_b": 0,
     }
+    total_home_insure = 0
+    total_income_rate = 0
 
     for _ in range(num_households):
-        # -------------------------
-        # General household categorical variables
-        # -------------------------
+        # General household variables
         age_sample = sample_from_csv(FILE_PATHS["age"], 'Age (6 categories)')
         if age_sample == 'Aged 65 years and over':
             observed['elderly_a'] += 1 # is elderly
@@ -208,9 +208,7 @@ def generate_household_samples(num_households: int) -> list[float]:
                                        filters={'Age (6 categories)': age_sample,
                                                 'Economic activity status (4 categories)': eas_sample})
 
-        # -------------------------
         # Income
-        # -------------------------
         income_df = dfs["mean_income"].copy()
         income_df['Total annual income (£)'] = (
             income_df['Total annual income (£)']
@@ -233,14 +231,14 @@ def generate_household_samples(num_households: int) -> list[float]:
             "L15: Full-time students": 0.35,
             "Does not apply": 0.00
         }
-        income_sample *= NSSEC[nssec_sample] # scale for the low income sample
+        total_income_rate += income_df['Total annual income (£)'].mean() / income_sample # less income = more risk
 
+        income_sample *= NSSEC[nssec_sample] # scale for the low income sample
+        total_income_rate += income_sample / income_df['Total annual income (£)'].mean()
         median_income = income_df['Total annual income (£)'].median()
         low_income_sample = int(income_sample < 0.6 * median_income)
 
-        # -------------------------
         # Household composition
-        # -------------------------
         num_adults_sample = sample_from_csv(FILE_PATHS["household_employed"],
                                             'Number of adults in employment in household (5 categories)',
                                             filters={'Household size (5 categories)': house_size_sample},
@@ -281,11 +279,7 @@ def generate_household_samples(num_households: int) -> list[float]:
         elif 'is deprived' in dep_health_sample:
             observed['health_b'] += 1 # Bad health
 
-        
-
-        # -------------------------
         # Housing and occupancy
-        # -------------------------
         num_people_sample = sample_from_csv(FILE_PATHS["people_per_room"],
                                            'Number of people per room in household (5 categories)',
                                            filters={'Household size (5 categories)': house_size_sample},
@@ -302,9 +296,7 @@ def generate_household_samples(num_households: int) -> list[float]:
                                                      'Occupancy rating for rooms (5 categories)': num_occupancy_sample},
                                             ignore_categories=['Does not apply'])
 
-        # -------------------------
         # Household deprivation
-        # -------------------------
         household_dep_sample = sum([
             dep_edu_sample == 'Household is deprived in the education dimension',
             dep_employ_sample == 'Household is deprived in the employment dimension',
@@ -312,9 +304,7 @@ def generate_household_samples(num_households: int) -> list[float]:
             dep_housing_sample == 'Household is deprived in the housing dimension'
         ])
 
-        # -------------------------
         # Tenure & insurance
-        # -------------------------
         tenure_sample = sample_from_csv(FILE_PATHS["tenure"],
                                        'Tenure of household (7 categories)',
                                        ignore_categories=['Does not apply'])
@@ -322,7 +312,10 @@ def generate_household_samples(num_households: int) -> list[float]:
         internet_prob = 0.85 if age_sample == 'Aged 65 years and over' and house_size_sample == '1 person in household' else 0.98
         internet_sample = np.random.binomial(1, internet_prob)
 
-        home_insure_sample = np.random.binomial(1, 0.75)
+        a, b = 30, 10  # mean ~ 0.75
+        home_insure_rate = np.random.beta(a, b)
+        total_home_insure += home_insure_rate
+        home_insure_sample = np.random.binomial(1, home_insure_rate)
         health_insure_sample = np.random.binomial(1, 0.14)
 
         '''print('========')
@@ -352,9 +345,7 @@ def generate_household_samples(num_households: int) -> list[float]:
         print('Home insurance: ',home_insure_sample)
         print('Health insurance: ',health_insure_sample)'''
         
-        # -------------------------
         # Household risk score
-        # -------------------------
         household_risk = calculate_household_risk(
             tenure_sample, acco_type_sample, house_size_sample, internet_sample,
             household_dep_sample, low_income_sample, home_insure_sample, health_insure_sample
@@ -365,7 +356,7 @@ def generate_household_samples(num_households: int) -> list[float]:
         '''print(household_risk)
         print('========')'''
     print(observed)
-    return total_risk / num_households, observed
+    return total_risk / num_households, observed, total_home_insure / num_households, total_income_rate / num_households
 
 '''#np.random.seed(42)
 for x in range(3):

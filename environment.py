@@ -53,6 +53,9 @@ FILE_DEPTH = {
 class Environment():
     def __init__(self):
         self.features = generate_feature_samples()
+        self.household = None
+        self.derived = {}
+        self.warning_issued = False
     
     def exp_damage(self, d, k):
         return 1 - np.exp(-k * d)
@@ -111,6 +114,65 @@ class Environment():
 
         # Children rate
         self.features['children'] = self.sample_beta(age, "category", "total_children", "total_not_children",observed['child_a'], observed['child_b'], "Observation")
+
+    def physical_vul(self):
+        self.derived['physical'] = 0
+        # self.features['building_age_ratio']
+        # self.features['grid']['impervious_ratio']
+        # self.features['grid']['road_dist_ratio']
+        # self.features['grid']['road_dens_ratio']
+        # self.features['grid']['water_dist_ratio']
+        # self.features['grid']['water_dens_ratio']
+        # self.features['grid']['elevation_ratio']
+        pass
+    
+    def socioeconomic_vul(self):
+        self.derived['socioeconomic'] = 0
+        # self.features['elderly']
+        # self.features['children']
+        # self.features['disabled']
+        # self.features["english_proficiency"]
+        # self.features['general_health']
+        # self.household ###
+        # self.features["property_value_ratio"]
+        pass
+
+    def preparedness(self):
+        self.derived['preparedness'] = 0
+        # self.warning_issued
+        # self.features["response_time_ratio"]
+        # self.features["handover_time_ratio"]
+        # self.features["bed_occupancy"]
+        # self.features["vehicle"]
+        # self.features['grid']['hospital_ratio']
+        pass
+
+    def recovery(self):
+        self.derived['recovery'] = 0
+        # self.features['income_rate']
+        # self.features["home_insure_rate"]
+        pass
+
+    def exponsure(self):
+        self.derived['exposure'] = 0
+        # self.features["population_density_ratio"]
+        # self.features["holiday"]
+        # self.features["grid"]["risk_score_ratio"]
+        # self.features["grid"]["historic"]
+        pass
+
+    def overall_vul(self):
+        self.derived['overall'] = 0
+        # NOT AN EQUAL SPLIT SINCE THERE IS BARELY ANY RECOVERY DATA
+        pass
+
+    def impact_score(self):
+        self.derived['impact'] = 0
+        pass
+
+    def init_means(self):
+
+        pass
 
     def init_prec(self, precipitation):
         # 24-Hour Precipitation
@@ -286,9 +348,9 @@ class Environment():
         start = time.time()
         dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
         print('Runtime load: ', time.time() - start)
-        
+
         start = time.time()
-        self.features['household'], observed = generate_household_samples(1000) # PLACEHOLDER 1000
+        self.household, observed, self.features['home_insure_rate'], self.features['income_rate'] = generate_household_samples(1000) # PLACEHOLDER 1000
         print('Runtime household: ', time.time() - start)
 
         start = time.time()
@@ -304,14 +366,15 @@ class Environment():
 
         # Emergency response times
         prec_factor = np.exp(self.features['precipitation'] / 50) 
-        self.features['response_time'] = self.features['response_time'] * prec_factor
+        self.features['response_time_ratio'] = self.features['response_time'] * prec_factor
 
         print('Runtime features: ', time.time() - start)
 
 np.random.seed(42)
-import time
 start = time.time()
 temp = Environment()
 temp.init_variable_samples()
 print('Runtime full: ', time.time() - start)
 print(temp.features)
+print(temp.household)
+print(temp.derived)
