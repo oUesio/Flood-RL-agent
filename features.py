@@ -75,7 +75,6 @@ def sample_cell_with_noise(gdf, noise_scale=0.05):
     features = [
         "water_dens", # more water = more risk (more water)
         "water_dist", # shorter distance = more risk (closer to river increases exposure)
-        "risk_score", # more risk = more risk
         "elevation", # lower elevation = more risk (water flows downhill)
         "impervious", # more impervious = more risk (less infiltration, more runoff)
         "historic", # flag
@@ -85,6 +84,7 @@ def sample_cell_with_noise(gdf, noise_scale=0.05):
     ]
     row = gdf.sample(1).iloc[0]
     sample = {}
+    eps=1e-6 # prevent zero division
     for f in features:
         val = row[f]
         if f == "historic":
@@ -93,12 +93,12 @@ def sample_cell_with_noise(gdf, noise_scale=0.05):
             noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
             s = max(val + noise, 0)
             mean = gdf[f].mean()
-            if f in ["impervious", "water_dens", "road_dist", "hospital", "risk_score",]:
-                sample[f+'_ratio'] = s / mean 
+            if f in ["impervious", "water_dens", "road_dist", "hospital"]:
+                sample[f+'_ratio'] = s / (mean + eps) 
             else:
-                sample[f+'_ratio'] = mean / s 
+                sample[f+'_ratio'] = mean / (s + eps)
     sample["geometry"] = row.geometry
-    return sample
+    return sample, row
 
 def map_proficiency(category):
     if category in [
@@ -110,6 +110,43 @@ def map_proficiency(category):
         return "Bad English Proficiency"
     else:
         return None
+
+def sample_flood_depth(row):
+    prob_cols = [
+        "p_0",
+        "p_0p0_0p2",
+        "p_0p2_0p3",
+        "p_0p3_0p6",
+        "p_0p6_0p9",
+        "p_0p9_1p2",
+        "p_gt_1p2"
+    ]
+    bins = [
+        (0.0, 0.0),
+        (0.0, 0.2),
+        (0.2, 0.3),
+        (0.3, 0.6),
+        (0.6, 0.9),
+        (0.9, 1.2),
+        (1.2, np.inf),
+    ]
+
+    # Build the probs dict
+    probs = {
+        bin_range: float(row[col])
+        for bin_range, col in zip(bins, prob_cols)
+    }
+
+    range_probs = np.array(list(probs.values()))
+    range_index = np.random.choice(len(bins), p=range_probs)
+    low, high = bins[range_index]
+
+    if low == 0.0 and high == 0.0:
+        return 0.0
+    elif np.isinf(high):
+        return low + np.random.exponential(scale=0.3)
+    else:
+        return np.random.uniform(low, high)
 
 def generate_feature_samples():
     samples = {}
@@ -173,10 +210,8 @@ def generate_feature_samples():
     current_year = datetime.now().year
     mean_year = np.sum(years * counts)
     mean_building_age = current_year - mean_year
-    print(mean_building_age)
     std_year = np.sqrt(np.sum(counts * (years - mean_year)**2))
     building_age = current_year - int(np.random.normal(loc=mean_year, scale=std_year))
-    print(building_age)
     samples["building_age_ratio"] = building_age / mean_building_age
 
     # Season
@@ -201,7 +236,7 @@ def generate_feature_samples():
         p=[c2_count / (c2_count + c3_count), c3_count / (c2_count + c3_count)],
     )
 
-    mean_response_time = c2.mean() if category == 'C2' else c3.mean
+    mean_response_time = c2.mean() if category == 'C2' else c3.mean()
 
     data = c2 if category == "C2" else c3
     shape, loc, scale = lognorm.fit(data, floc=0)
@@ -264,9 +299,45 @@ def generate_feature_samples():
     samples["second_address"] = sample_beta(second_add, "second_address_combined", "Has second address", "No second address", "Observation")'''
 
     # Grid
-    samples["grid"] = sample_cell_with_noise(gdf_grid)
+    samples["grid"], row = sample_cell_with_noise(gdf_grid)
+
+    # Flood depth
+    samples["depth"] = sample_flood_depth(row)
 
     return samples
 
-samples = generate_feature_samples()
-print(samples)
+import matplotlib.pyplot as plt
+import numpy as np
+from collections import defaultdict
+
+# Store all samples in a list
+all_values = defaultdict(list)
+
+# Collect values across all samples
+for _ in range(100):
+    samples = generate_feature_samples()
+    for key, values in samples['grid'].items():
+        if key != 'geometry':
+            if np.isfinite(values):
+                all_values[key].append(values)  # combine all iterations
+            else:
+                print(key, values)
+
+# Plot histograms for each feature
+num_features = len(all_values)
+cols = 2
+rows = int(np.ceil(num_features / cols))
+
+fig, axes = plt.subplots(rows, cols, figsize=(10, rows*3))
+axes = axes.flatten()
+
+for i, (feature, values) in enumerate(all_values.items()):
+    axes[i].hist(values, bins=20, alpha=0.7)
+    axes[i].set_title(feature)
+
+# Remove empty subplots if any
+for j in range(num_features, len(axes)):
+    fig.delaxes(axes[j])
+
+plt.tight_layout()
+plt.savefig('temp.png')

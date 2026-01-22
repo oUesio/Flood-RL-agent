@@ -374,5 +374,5 @@ for x in range(3):
     plt.savefig(f"temp_{x}.png", dpi=300, bbox_inches="tight")
     plt.close()'''
 
-risk_score, observed = generate_household_samples(1000)
-print(risk_score, observed)
+'''risk_score, observed = generate_household_samples(1000)
+print(risk_score, observed)'''

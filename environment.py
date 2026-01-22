@@ -56,6 +56,7 @@ class Environment():
         self.household = None
         self.derived = {}
         self.warning_issued = False
+        self.impact = None
     
     def exp_damage(self, d, k):
         return 1 - np.exp(-k * d)
@@ -116,63 +117,153 @@ class Environment():
         self.features['children'] = self.sample_beta(age, "category", "total_children", "total_not_children",observed['child_a'], observed['child_b'], "Observation")
 
     def physical_vul(self):
-        self.derived['physical'] = 0
-        # self.features['building_age_ratio']
-        # self.features['grid']['impervious_ratio']
-        # self.features['grid']['road_dist_ratio']
-        # self.features['grid']['road_dens_ratio']
-        # self.features['grid']['water_dist_ratio']
-        # self.features['grid']['water_dens_ratio']
-        # self.features['grid']['elevation_ratio']
-        pass
+        weights = {
+            "elevation_ratio": 0.30,
+            "impervious_ratio": 0.20,
+            "water_dist_ratio": 0.05,
+            "water_dens_ratio": 0.10,
+            "road_dens_ratio": 0.10,
+            "road_dist_ratio": 0.05,
+            "building_age_ratio": 0.10,
+        }
+
+        features = {
+            "elevation_ratio": self.features["grid"]["elevation_ratio"],
+            "impervious_ratio": self.features["grid"]["impervious_ratio"],
+            "water_dist_ratio": self.features["grid"]["water_dist_ratio"],
+            "water_dens_ratio": self.features["grid"]["water_dens_ratio"],
+            "road_dens_ratio": self.features["grid"]["road_dens_ratio"],
+            "road_dist_ratio": self.features["grid"]["road_dist_ratio"],
+            "building_age_ratio": self.features["building_age_ratio"],
+        }
+        print(features)
+
+        total_weight = sum(weights.values())
+
+        self.derived["physical"] = (
+            sum(weights[k] * features[k] for k in weights) / total_weight
+        )
+
     
     def socioeconomic_vul(self):
-        self.derived['socioeconomic'] = 0
-        # self.features['elderly']
-        # self.features['children']
-        # self.features['disabled']
-        # self.features["english_proficiency"]
-        # self.features['general_health']
-        # self.household ###
-        # self.features["property_value_ratio"]
-        pass
+        weights = {
+            "elderly": 0.15,
+            "disabled": 0.15,
+            "children": 0.15,
+            "general_health": 0.15,
+            "english_proficiency": 0.05,
+            "household": 0.30, ###
+            "property_value_ratio": 0.10,
+        }
+
+        features = {
+            "elderly": self.features["elderly"],
+            "disabled": self.features["disabled"],
+            "children": self.features["children"],
+            "general_health": self.features["general_health"],
+            "english_proficiency": self.features["english_proficiency"],
+            "household": self.household,
+            "property_value_ratio": self.features["property_value_ratio"],
+        }
+        print(features)
+
+        total_weight = sum(weights.values())
+
+        self.derived["socioeconomic"] = (
+            sum(weights[k] * features[k] for k in weights) / total_weight
+        )
+
 
     def preparedness(self):
-        self.derived['preparedness'] = 0
-        # self.warning_issued
-        # self.features["response_time_ratio"]
-        # self.features["handover_time_ratio"]
-        # self.features["bed_occupancy"]
-        # self.features["vehicle"]
-        # self.features['grid']['hospital_ratio']
-        pass
+        weights = {
+            "response_time_ratio": 0.20,
+            "handover_time_ratio": 0.10,
+            "bed_occupancy": 0.10,
+            "vehicle": 0.15,
+            "hospital_ratio": 0.10,
+        }
+
+        features = {
+            "response_time_ratio": self.features["response_time_ratio"],
+            "handover_time_ratio": self.features["handover_time_ratio"],
+            "bed_occupancy": self.features["bed_occupancy"],
+            "vehicle": self.features["vehicle_rate"],
+            "hospital_ratio": self.features["grid"]["hospital_ratio"],
+        }
+        print(features)
+
+        total_weight = sum(weights.values())
+        warning_factor = 1.2 if self.warning_issued else 1
+
+        self.derived["preparedness"] = (
+            (sum(weights[k] * features[k] for k in weights) / total_weight) * warning_factor
+        )
 
     def recovery(self):
-        self.derived['recovery'] = 0
-        # self.features['income_rate']
-        # self.features["home_insure_rate"]
-        pass
+        weights = {
+            "income_rate": 0.40,
+            "home_insure_rate": 0.20,
+        }
 
-    def exponsure(self):
-        self.derived['exposure'] = 0
-        # self.features["population_density_ratio"]
-        # self.features["holiday"]
-        # self.features["grid"]["risk_score_ratio"]
-        # self.features["grid"]["historic"]
-        pass
+        features = {
+            "income_rate": self.features["income_rate"],
+            "home_insure_rate": self.features["home_insure_rate"],
+        }
+        print(features)
 
-    def overall_vul(self):
-        self.derived['overall'] = 0
-        # NOT AN EQUAL SPLIT SINCE THERE IS BARELY ANY RECOVERY DATA
-        pass
+        total_weight = sum(weights.values())
+
+        self.derived["recovery"] = (
+            sum(weights[k] * features[k] for k in weights) / total_weight
+        )
+
+
+    def exposure(self):
+        weights = {
+            "population_density_ratio": 0.30,
+        }
+
+        features = {
+            "population_density_ratio": self.features["population_density_ratio"],
+        }
+        print(features)
+
+        total_weight = sum(weights.values())
+        historic_factor = 1.2 if self.features["grid"]["historic"] else 1
+        holiday_factor = 1.1 if self.features["holiday"] else 1
+
+        self.derived["exposure"] = (
+            (sum(weights[k] * features[k] for k in weights) / total_weight) * historic_factor * holiday_factor
+        )
 
     def impact_score(self):
-        self.derived['impact'] = 0
-        pass
+        weights = {
+            "exposure": 0.25,
+            "physical": 0.20,
+            "socioeconomic": 0.15,
+            "depth": 0.15,
+            "damage_fraction": 0.10,
+            "preparedness": 0.10,
+            "recovery": 0.05,
+        }
 
-    def init_means(self):
+        features = {
+            "exposure": self.derived["exposure"],
+            "physical": self.derived["physical"],
+            "socioeconomic": self.derived["socioeconomic"],
+            "depth": self.features["depth"],
+            "damage_fraction": self.features["damage_fraction"],
+            # invert: higher preparedness/recovery = lower impact
+            "preparedness": -1 * self.derived["preparedness"],
+            "recovery": -1 * self.derived["recovery"],
+        }
 
-        pass
+        total_weight = sum(weights.values())
+
+        self.impact = (
+            sum(weights[k] * features[k] for k in weights) / total_weight
+        )
+
 
     def init_prec(self, precipitation):
         # 24-Hour Precipitation
@@ -278,61 +369,6 @@ class Environment():
             self.features['soil_moisture'] = norm.rvs(mu, sigma)
 
     def init_depth(self):
-        # Flood depth
-        grid_geom = gpd.GeoSeries([self.features['grid']["geometry"]])
-        if grid_geom.crs is None:
-            grid_geom = grid_geom.set_crs(epsg=27700)
-
-        # Load and clip depth-threshold shapefiles
-        threshold_layers = {}
-        for shp_path in glob.glob(os.path.join(FILE_PATHS_DIR['flood_risk_dir'], "*/*.shp")):
-            gdf = gpd.read_file(shp_path)
-            if gdf.crs != grid_geom.crs:
-                gdf = gdf.to_crs(grid_geom.crs)
-            gdf = gdf.clip(grid_geom)
-
-            if not gdf.empty:
-                key = os.path.basename(shp_path)
-                threshold_layers[key] = gdf
-
-        exceedance_probs = {}
-
-        cell_area = self.features['grid']["geometry"].area
-
-        for file, layer in threshold_layers.items():
-            risk_weight = layer["risk_band"].map(RISK_BAND_WEIGHTS)
-            weighted_area = layer.geometry.area * risk_weight
-            total_weighted_area = weighted_area.sum()
-            prob = total_weighted_area / cell_area
-            exceedance_probs[FILE_DEPTH[file]] = prob
-
-        for depth in sorted(exceedance_probs):
-            prob = exceedance_probs[depth]
-            print(f"Depth > {depth} m: Probability = {prob:.20f}")
-
-        print(exceedance_probs)
-
-        breaks = [0, 0.2, 0.3, 0.6, 0.9, 1.2]
-        probs = {(0.0, 0.0): 1 - exceedance_probs[0], (1.2, np.inf): exceedance_probs[1.2]}
-        for i in range(len(breaks)-1):
-            a, b = breaks[i], breaks[i+1]
-            probs[(a, b)] = exceedance_probs[a] - exceedance_probs[b]
-        print(probs)
-
-        # Sample a range
-        bins = list(probs.keys())
-        range_probs = np.array(list(probs.values()))
-        range_index = np.random.choice(len(bins), p=range_probs)
-        low, high = bins[range_index]
-
-        # Sample within the selected range
-        if low == 0.0 and high == 0.0:
-            self.features['depth'] = 0.0
-        elif np.isinf(high):
-            self.features['depth'] = low + np.random.exponential(scale=0.3)
-        else:
-            self.features['depth'] = np.random.uniform(low, high)
-
         # Depth-damage
         df = pd.read_csv(FILE_PATHS['depth_damage'])
         depths = np.array([float(c) for c in df.columns[1:]])
@@ -345,19 +381,11 @@ class Environment():
         self.features['damage_fraction'] = np.clip(self.exp_damage(self.features['depth'], k) + np.random.normal(0, 0.05), 0, 1)
 
     def init_variable_samples(self):
-        start = time.time()
         dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
-        print('Runtime load: ', time.time() - start)
 
-        start = time.time()
-        self.household, observed, self.features['home_insure_rate'], self.features['income_rate'] = generate_household_samples(1000) # PLACEHOLDER 1000
-        print('Runtime household: ', time.time() - start)
-
-        start = time.time()
+        self.household, observed, self.features['home_insure_rate'], self.features['income_rate'] = generate_household_samples(10) # PLACEHOLDER VALUE
         self.update_beta(observed, dfs['disabled'], dfs['general_health'], dfs['age'])
-        print('Runtime beta: ', time.time() - start)
         
-        start = time.time()
         self.init_prec(dfs['precipitation'])
         self.init_groundwater()
         self.init_river()
@@ -366,11 +394,19 @@ class Environment():
 
         # Emergency response times
         prec_factor = np.exp(self.features['precipitation'] / 50) 
-        self.features['response_time_ratio'] = self.features['response_time'] * prec_factor
+        self.features['response_time_ratio'] = self.features['response_time_ratio'] * prec_factor
 
-        print('Runtime features: ', time.time() - start)
+        # Derived
+        self.physical_vul()
+        self.socioeconomic_vul()
+        self.preparedness()
+        self.recovery()
+        self.exposure()
 
-np.random.seed(42)
+        # Impact score
+        self.impact_score()
+        
+'''np.random.seed(42)
 start = time.time()
 temp = Environment()
 temp.init_variable_samples()
@@ -378,3 +414,53 @@ print('Runtime full: ', time.time() - start)
 print(temp.features)
 print(temp.household)
 print(temp.derived)
+print(temp.impact)
+# self.derived["exposure"], self.derived["physical"], self.derived["socioeconomic"], self.features["depth"], self.features["damage_fraction"], 1 - self.derived["preparedness"], "recovery": 1 - self.derived["recovery"], self.impact'''
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+#np.random.seed(42)
+
+N = 10  # number of simulations
+
+results = {
+    "exposure": [],
+    "physical": [],
+    "socioeconomic": [],
+    "depth": [],
+    "damage_fraction": [],
+    "preparedness_inv": [],
+    "recovery_inv": [],
+    "impact": [],
+}
+
+for i in range(N):
+    print(i)
+    temp = Environment()
+    temp.init_variable_samples()
+    print(temp.derived)
+    print(temp.features['depth'])
+    print(temp.impact)
+
+    results["exposure"].append(temp.derived["exposure"])
+    results["physical"].append(temp.derived["physical"])
+    results["socioeconomic"].append(temp.derived["socioeconomic"])
+    results["depth"].append(temp.features["depth"])
+    results["damage_fraction"].append(temp.features["damage_fraction"])
+    results["preparedness_inv"].append(temp.derived["preparedness"])
+    results["recovery_inv"].append(temp.derived["recovery"])
+    results["impact"].append(temp.impact)
+
+'''fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+axes = axes.flatten()
+
+for ax, (key, values) in zip(axes, results.items()):
+    ax.hist(values, bins=30)
+    ax.set_title(key)
+    ax.set_xlabel("Value")
+    ax.set_ylabel("Frequency")
+
+plt.tight_layout()
+plt.save_fig('temp.png')
+'''
