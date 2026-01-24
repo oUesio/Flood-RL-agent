@@ -53,16 +53,15 @@ def sample_time_from_band(band):
         return trunc_normal(30, 60, mean=45, sd=7)
     if band == "Over 60 min":
         return 60 + np.random.exponential(scale=20)
-    raise ValueError(f"Unknown band: {band}")
 
-
-def sample_handover_time(probs, n=1):
+def sample_handover_time(probs, max_time=120):
     bands = probs.index.to_numpy()
     p = probs.to_numpy()
-    sampled = np.random.choice(bands, size=n, p=p)
-    times = np.array([sample_time_from_band(b) for b in sampled])
-    return times if n > 1 else times[0]
+    sampled = np.random.choice(bands, size=1, p=p)
+    time = sample_time_from_band(sampled)
 
+    norm_time = np.clip(time / max_time, 0, 1)
+    return norm_time
 
 def sample_beta(df, category_col, a, b, value_col):
     total = df.groupby(category_col)[value_col].sum()
@@ -91,10 +90,15 @@ def sample_cell_with_noise(gdf, noise_scale=0.05):
             sample["historic"] = val
         else:
             noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
-            s = max(val + noise, 0)
+            s = max(val + noise, 0) # ensure positive
             mean = gdf[f].mean()
-            if f in ["impervious", "water_dens", "road_dist", "hospital"]:
-                sample[f+'_ratio'] = s / (mean + eps) 
+            if f in ["impervious", "water_dens", "road_dist"]:
+                sample[f+'_ratio'] = s / mean
+            elif f == 'hospital':
+                min_hosp = gdf[f].min()
+                max_hosp = gdf[f].max()
+                s = min(s, max_hosp) # ensure does not exceed max
+                sample[f+'_norm'] = (s - min_hosp) / (max_hosp - min_hosp)
             else:
                 sample[f+'_ratio'] = mean / (s + eps)
     sample["geometry"] = row.geometry
@@ -181,7 +185,9 @@ def generate_feature_samples():
     log_price = np.log(property_df["price"])
     shape, loc, scale = skewnorm.fit(log_price)
 
-    samples["property_value_ratio"] = property_df["price"].mean() / np.exp(skewnorm.rvs(shape, loc=loc, scale=scale, size=1)[0]) # lower property value = more susceptible
+    sample_value = np.exp(skewnorm.rvs(shape, loc=loc, scale=scale, size=1)[0])
+    cdf_value = skewnorm.cdf(np.log(sample_value), shape, loc=loc, scale=scale)
+    samples["property_value_norm"] = cdf_value
 
     # Building age
     building_age = dfs["property_age"]
@@ -211,7 +217,9 @@ def generate_feature_samples():
     mean_year = np.sum(years * counts)
     mean_building_age = current_year - mean_year
     std_year = np.sqrt(np.sum(counts * (years - mean_year)**2))
-    building_age = current_year - int(np.random.normal(loc=mean_year, scale=std_year))
+    sample_year = int(np.random.normal(loc=mean_year, scale=std_year))
+    sample_year = min(sample_year, current_year) # ensure not a future year
+    building_age = current_year - sample_year
     samples["building_age_ratio"] = building_age / mean_building_age
 
     # Season
@@ -236,16 +244,19 @@ def generate_feature_samples():
         p=[c2_count / (c2_count + c3_count), c3_count / (c2_count + c3_count)],
     )
 
-    mean_response_time = c2.mean() if category == 'C2' else c3.mean()
-
     data = c2 if category == "C2" else c3
     shape, loc, scale = lognorm.fit(data, floc=0)
     response_sample = lognorm.rvs(shape, loc=loc, scale=scale)
 
-    factor = 1 + 0.5 * ((popden_mean - popden_sample) / popden_mean)
-    samples["response_time_ratio"] = response_sample * factor / mean_response_time # longer delays = more risk
+    data_min = data.min()
+    data_max = data.max()
 
-    # Ambulance handover delays !!!
+    factor = 1 + 0.5 * ((popden_mean - popden_sample) / popden_mean)
+    samples["response_time_norm"] = (
+        (response_sample * factor - data_min) / (data_max - data_min)
+    ).clip(0, 1) # longer delays = more risk
+
+    # Ambulance handover delays
     handover = dfs["ambulance_handover"]
 
     for col in ["Handover time known", "Over 15 minutes", "Over 30 minutes", "Over 60 minutes", "Handover time unknown", "All handovers"]:
@@ -260,10 +271,8 @@ def generate_feature_samples():
     handover_season = handover[handover["Date_parsed"].dt.month.isin(SEASON_MONTHS[samples["season"]])]
 
     counts = handover_season[["Under 15 min", "15–30 min", "30–60 min", "Over 60 min"]].sum()
-    midpoints = np.array([7.5, 22.5, 45, 75])
-    mean_handover = np.sum(counts * midpoints) / counts.sum()
     probs = counts / counts.sum()
-    samples["handover_time_ratio"] = sample_handover_time(probs) / mean_handover
+    samples["handover_time_norm"] = sample_handover_time(probs)
 
     # Hospital bed availability 
     beds = dfs["hospital_beds"]
@@ -306,7 +315,7 @@ def generate_feature_samples():
 
     return samples
 
-import matplotlib.pyplot as plt
+'''import matplotlib.pyplot as plt
 import numpy as np
 from collections import defaultdict
 
@@ -341,3 +350,4 @@ for j in range(num_features, len(axes)):
 
 plt.tight_layout()
 plt.savefig('temp.png')
+'''

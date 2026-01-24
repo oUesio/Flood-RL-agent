@@ -128,8 +128,8 @@ def calculate_household_risk(
         WEIGHTS["low_income_risk"] * low_income_risk +
         WEIGHTS["home_insure_risk"] * home_insure_risk +
         WEIGHTS["health_insure_risk"] * health_insure_risk
-    )
-
+    ) 
+    risk_score = risk_score / sum(WEIGHTS.values())
     noise = np.random.normal(0, 0.01)
 
     '''print(
@@ -149,7 +149,6 @@ def calculate_household_risk(
     FINAL RISK SCORE (with noise): {np.clip(risk_score + noise, 0, 1):.3f}
     """
     )'''
-    
     return np.clip(risk_score + noise, 0, 1)
 
 # ======================
@@ -175,7 +174,7 @@ def generate_household_samples(num_households: int) -> list[float]:
         "health_b": 0,
     }
     total_home_insure = 0
-    total_income_rate = 0
+    total_income_norm = 0
 
     for _ in range(num_households):
         # General household variables
@@ -219,6 +218,11 @@ def generate_household_samples(num_households: int) -> list[float]:
         log_income = np.log(income_df['Total annual income (£)'])
         shape, loc, scale = skewnorm.fit(log_income)
         income_sample = np.exp(skewnorm.rvs(shape, loc=loc, scale=scale, size=1))[0]
+        log_sample = np.log(income_sample)
+        log_min = log_income.min()
+        log_max = log_income.max()
+        total_income_norm += (log_sample - log_min) / (log_max - log_min)
+
         NSSEC = {
             "L1, L2 and L3: Higher managerial, administrative and professional occupations": 1.90,
             "L4, L5 and L6: Lower managerial, administrative and professional occupations": 1.35,
@@ -231,10 +235,8 @@ def generate_household_samples(num_households: int) -> list[float]:
             "L15: Full-time students": 0.35,
             "Does not apply": 0.00
         }
-        total_income_rate += income_df['Total annual income (£)'].mean() / income_sample # less income = more risk
 
         income_sample *= NSSEC[nssec_sample] # scale for the low income sample
-        total_income_rate += income_sample / income_df['Total annual income (£)'].mean()
         median_income = income_df['Total annual income (£)'].median()
         low_income_sample = int(income_sample < 0.6 * median_income)
 
@@ -355,8 +357,7 @@ def generate_household_samples(num_households: int) -> list[float]:
 
         '''print(household_risk)
         print('========')'''
-    print(observed)
-    return total_risk / num_households, observed, total_home_insure / num_households, total_income_rate / num_households
+    return total_risk / num_households, observed, total_home_insure / num_households, total_income_norm / num_households
 
 '''#np.random.seed(42)
 for x in range(3):

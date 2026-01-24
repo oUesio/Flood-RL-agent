@@ -116,7 +116,7 @@ class Environment():
         # Children rate
         self.features['children'] = self.sample_beta(age, "category", "total_children", "total_not_children",observed['child_a'], observed['child_b'], "Observation")
 
-    def physical_vul(self):
+    def physical_vul(self): # high physicial = high risk
         weights = {
             "elevation_ratio": 0.30,
             "impervious_ratio": 0.20,
@@ -143,29 +143,28 @@ class Environment():
         self.derived["physical"] = (
             sum(weights[k] * features[k] for k in weights) / total_weight
         )
+        print(self.derived["physical"])
 
-    
-    def socioeconomic_vul(self):
+    def socioeconomic_vul(self): # high socioeconomic = high risk
         weights = {
             "elderly": 0.15,
             "disabled": 0.15,
             "children": 0.15,
             "general_health": 0.15,
-            "english_proficiency": 0.05,
-            "household": 0.30, ###
-            "property_value_ratio": 0.10,
+            "english_proficiency": 0.10,
+            "household": 0.30,
+            "property_value_norm": 0.10,
         }
 
         features = {
-            "elderly": self.features["elderly"],
-            "disabled": self.features["disabled"],
-            "children": self.features["children"],
-            "general_health": self.features["general_health"],
-            "english_proficiency": self.features["english_proficiency"],
-            "household": self.household,
-            "property_value_ratio": self.features["property_value_ratio"],
+            "elderly": self.features["elderly"], # high = high risk
+            "disabled": self.features["disabled"], # high = high risk
+            "children": self.features["children"], # high = high risk
+            "general_health": 1 - self.features["general_health"], # high = low risk (good health) (invert)
+            "english_proficiency": 1 - self.features["english_proficiency"], # high = low risk (proficient at english) (invert)
+            "household": self.household, # high = high risk
+            "property_value_norm": 1 - self.features["property_value_norm"], # low = high risk (CDF) (invert)
         }
-        print(features)
 
         total_weight = sum(weights.values())
 
@@ -174,49 +173,46 @@ class Environment():
         )
 
 
-    def preparedness(self):
+    def preparedness(self): # high preparedness = lower risk
         weights = {
-            "response_time_ratio": 0.20,
-            "handover_time_ratio": 0.10,
+            "response_time_norm": 0.20,
+            "handover_time_norm": 0.10,
             "bed_occupancy": 0.10,
-            "vehicle": 0.15,
-            "hospital_ratio": 0.10,
+            "vehicle": 0.15, 
+            "hospital_norm": 0.10,
         }
 
         features = {
-            "response_time_ratio": self.features["response_time_ratio"],
-            "handover_time_ratio": self.features["handover_time_ratio"],
-            "bed_occupancy": self.features["bed_occupancy"],
-            "vehicle": self.features["vehicle_rate"],
-            "hospital_ratio": self.features["grid"]["hospital_ratio"],
+            "response_time_norm": 1 - self.features["response_time_norm"], # long response time = high risk
+            "handover_time_norm": 1 - self.features["handover_time_norm"], # long handover time = high risk
+            "bed_occupancy": self.features["bed_occupancy"], # low bed occupancy = high risk (free beds)
+            "vehicle": self.features["vehicle_rate"], # low vehicle rate = high risk
+            "hospital_norm": 1 - self.features["grid"]["hospital_norm"],  # long distance = high risk
         }
-        print(features)
 
         total_weight = sum(weights.values())
-        warning_factor = 1.2 if self.warning_issued else 1
+        warning_factor = 1.4 if self.warning_issued else 1
 
-        self.derived["preparedness"] = (
+        self.derived["preparedness"] = np.clip((
             (sum(weights[k] * features[k] for k in weights) / total_weight) * warning_factor
-        )
+        ), 0, 1)
 
-    def recovery(self):
+    def recovery(self): # high recovery = lower risk
         weights = {
-            "income_rate": 0.40,
+            "income_norm": 0.40,
             "home_insure_rate": 0.20,
         }
 
         features = {
-            "income_rate": self.features["income_rate"],
-            "home_insure_rate": self.features["home_insure_rate"],
+            "income_norm": self.features["income_norm"], # low income = high risk
+            "home_insure_rate": self.features["home_insure_rate"], # less home insurance = high risk
         }
-        print(features)
 
         total_weight = sum(weights.values())
 
         self.derived["recovery"] = (
             sum(weights[k] * features[k] for k in weights) / total_weight
         )
-
 
     def exposure(self):
         weights = {
@@ -226,44 +222,30 @@ class Environment():
         features = {
             "population_density_ratio": self.features["population_density_ratio"],
         }
-        print(features)
 
         total_weight = sum(weights.values())
         historic_factor = 1.2 if self.features["grid"]["historic"] else 1
         holiday_factor = 1.1 if self.features["holiday"] else 1
 
-        self.derived["exposure"] = (
+        self.derived["exposure"] = np.clip((
             (sum(weights[k] * features[k] for k in weights) / total_weight) * historic_factor * holiday_factor
-        )
+        ), 0, 1)
+
 
     def impact_score(self):
-        weights = {
-            "exposure": 0.25,
-            "physical": 0.20,
-            "socioeconomic": 0.15,
-            "depth": 0.15,
-            "damage_fraction": 0.10,
-            "preparedness": 0.10,
-            "recovery": 0.05,
-        }
-
-        features = {
-            "exposure": self.derived["exposure"],
-            "physical": self.derived["physical"],
-            "socioeconomic": self.derived["socioeconomic"],
-            "depth": self.features["depth"],
-            "damage_fraction": self.features["damage_fraction"],
-            # invert: higher preparedness/recovery = lower impact
-            "preparedness": -1 * self.derived["preparedness"],
-            "recovery": -1 * self.derived["recovery"],
-        }
-
-        total_weight = sum(weights.values())
-
-        self.impact = (
-            sum(weights[k] * features[k] for k in weights) / total_weight
+        physical_impact = ( # no exposure or no damage = no physical impact
+            self.derived["exposure"] # more exposure = high risk
+            * self.derived["physical"] # high physical = high risk
+            * self.features["damage_fraction"] # high damage = high risk
         )
 
+        socio_impact = ( # reduce socio vulnerability if preparedness and recovery are high
+            self.derived["socioeconomic"] # high socio = high risk
+            * (1 - self.derived["preparedness"]) # high preparedness = low risk
+            * (1 - self.derived["recovery"]) # high recovery = low risk
+        )
+
+        self.impact = physical_impact + socio_impact
 
     def init_prec(self, precipitation):
         # 24-Hour Precipitation
@@ -383,7 +365,7 @@ class Environment():
     def init_variable_samples(self):
         dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
 
-        self.household, observed, self.features['home_insure_rate'], self.features['income_rate'] = generate_household_samples(10) # PLACEHOLDER VALUE
+        self.household, observed, self.features['home_insure_rate'], self.features['income_norm'] = generate_household_samples(10) # PLACEHOLDER VALUE
         self.update_beta(observed, dfs['disabled'], dfs['general_health'], dfs['age'])
         
         self.init_prec(dfs['precipitation'])
@@ -394,7 +376,7 @@ class Environment():
 
         # Emergency response times
         prec_factor = np.exp(self.features['precipitation'] / 50) 
-        self.features['response_time_ratio'] = self.features['response_time_ratio'] * prec_factor
+        self.features['response_time_norm'] = self.features['response_time_norm'] * prec_factor
 
         # Derived
         self.physical_vul()
@@ -422,7 +404,7 @@ import matplotlib.pyplot as plt
 
 #np.random.seed(42)
 
-N = 10  # number of simulations
+N = 20  # number of simulations
 
 results = {
     "exposure": [],
@@ -439,9 +421,6 @@ for i in range(N):
     print(i)
     temp = Environment()
     temp.init_variable_samples()
-    print(temp.derived)
-    print(temp.features['depth'])
-    print(temp.impact)
 
     results["exposure"].append(temp.derived["exposure"])
     results["physical"].append(temp.derived["physical"])
