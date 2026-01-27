@@ -1,121 +1,83 @@
 
-import pandas as pd
 import numpy as np
-import geopandas as gpd
-from scipy.stats import gamma, lognorm, norm, skewnorm, truncnorm
-import random
-import os
-import rasterio
-import glob
-import datetime as dt
-from scipy.optimize import curve_fit
-
-import time
-
-from household import generate_household_samples # MODIFY TO AVERAGED NOT ARRAY, ALSO OUTPUT TOTAL TO UPDATE THE BETA DISTS
-from features import generate_feature_samples, SEASON_MONTHS
-
-
-FILE_PATHS = {
-    "precipitation": "data/precipitation.csv",
-    "depth_damage": "data/depth_damage.csv",
-    "disabled": "data/disabled.csv",
-    "general_health": "data/general_health.csv",
-    "age": "data/age.csv",
-}
-
-FILE_PATHS_DIR = {
-    "groundwater_dir": "data/groundwater_level",
-    "river_flow_dir": "data/river_flow",
-    "river_level_dir": "data/river_level",
-    "soil_moisture_dir": "data/soil_moisture",
-    "flood_risk_dir": "data/flood_risk",
-}
-
-DEPTH_THRESHOLDS = [0.2, 0.3, 0.6, 0.9, 1.2]
-
-RISK_BAND_WEIGHTS = {
-    "Very Low": 0.0005, # (0 + 0.1)/2 
-    "Low": 0.00055, # (0.1 + 1)/2
-    "Medium": 0.0215, # (1 + 3.3)/2
-    "High": 0.033 # (3.3 + 3.3)/2
-}
-
-FILE_DEPTH = {
-    "merged_rofsw_4bandPolygon.shp": 0.0,
-    "merged_rofsw_4band_0_2m_depthPolygon.shp": 0.2,
-    "merged_rofsw_4band_0_3m_depthPolygon.shp": 0.3,
-    "merged_rofsw_4band_0_6m_depthPolygon.shp": 0.6,
-    "merged_rofsw_4band_0_9m_depthPolygon.shp": 0.9,
-    "merged_rofsw_4band_1_2m_depthPolygon.shp": 1.2
-}
+from scipy.stats import gamma
+from features import Sampler
 
 class Environment():
     def __init__(self):
-        self.features = generate_feature_samples()
-        self.household = None
         self.derived = {}
         self.warning_issued = False
         self.impact = None
-    
-    def exp_damage(self, d, k):
-        return 1 - np.exp(-k * d)
-    
-    def sample_beta(self, df, category_col, a, b, observed_a, observed_b, value_col):
-        total = df.groupby(category_col)[value_col].sum()
-        alpha = total[a] + 1 + observed_a
-        beta = total[b] + 1 + observed_b
-        return np.random.beta(alpha, beta, size=1)[0]
+        self.samples = Sampler()
+        self.update_deprived()
 
-    def update_precipitation(self):
-        # update precipitation based on previous precipitation
+    def update_prec(self):
+        prec_dist = self.samples.features.dist_params['precipitation']
+        zero_sample = np.random.binomial(n=1, p=prec_dist['pct_zero'], size=1)[0]
+        sample = 0 if zero_sample == 1 else gamma.rvs(a=prec_dist['shape'], loc=prec_dist['loc'], scale=prec_dist['scale'], size=1)[0]
+        alpha = 0.7
+        self.samples.features['precipitation'] = alpha * self.samples.features['precipitation'] + (1 - alpha) * sample
+    
+    # Update features for next time step
+    def update_hydro(self):
+        '''# Soil moisture, updates based on precipitation, flood depth and impervious surface area
+        loss_frac = 0.002 # fractional soil moisture loss per timestep
+        S_max = 80 # assume max water soil can absorb in mm
+        depth = self.samples.features['depth']*1000 # depth to mm
+        SM_mm = self.samples.features['soil_moisture'] * S_max
+        water = (self.samples.features['precipitation'] + depth) * (1 - self.samples.features["impervious_frac"])
+        loss = loss_frac * SM_mm # Water loss from evaporation
+        self.samples.features['soil_moisture'] = min(max(SM_mm + water - loss, 0), S_max) / S_max'''
+
+        '''# self.samples.features['river_flow']'''
+
+        # River level
+        '''
+        - update river level using precipitation and flood depth
+        '''
+         
         pass
 
-    def update(self):
-        # groundwater level, river flow, river level, soil moisture saturation, emergency response
-        # self.features['precipitation']
-        # modify those variables based on self.precipitation
-        pass
+    def update_emergency(self):
+        # response time, bed occupancy, handover time
+        # self.samples.features["response_time_norm"]
+
+        # Bed occupancy
+        bed_sample = np.random.beta(self.hospital_bed_stats[0], self.hospital_bed_stats[1], size=1)[0]
+        alpha = 0.7
+        self.samples.features['bed_occupancy'] = alpha * self.samples.features['bed_occupancy'] + (1 - alpha) * bed_sample
+
+        # Handover time
+        handover_sample = self.samples.features.sample_handover_time(self.handover_prob)
+        alpha = 0.7
+        self.samples.features['handover_time_norm'] = alpha * self.samples.features['handover_time_norm'] + (1 - alpha) * handover_sample
 
     def update_depth(self):
         # flood depth, depth-damage
-        # modify based on the hydrological features
+        # self.samples.features['depth'] 
+        '''
+        based on river level and scaled for water density and watercourse distance
+        '''
+        # self.samples.features['damage_fraction']
+        self.depth_damage()
         pass
 
-    def update_beta(self, observed, disabled, gen_health, age):
-        # Disability rate
-        self.features['disabled'] = self.sample_beta(disabled, 'Disability (3 categories)', 'Disabled under the Equality Act', 'Not disabled under the Equality Act', observed['disable_a'], observed['disable_b'], 'Observation')
+    def update_warning(self):
+        # used when rl agent makes choice to issue
+        self.warning_issued = 1
 
-        # General health rate
-        self.features['general_health'] = self.sample_beta(gen_health, 'General health (3 categories)', 'Good health', 'Not good health', observed['health_a'], observed['health_b'], 'Observation')
+    def update(self):
+        # New precipitation
+        self.update_prec()   
 
-        # Age
-        age["children"] = age["Age (6 categories)"] == "Aged 15 years and under"
-        age["elderly"] = age["Age (6 categories)"] == "Aged 65 years and over"
-        age = (age.groupby("Lower tier local authorities")
-            .apply(
-                lambda x: pd.Series({
-                    "total_children": x.loc[x["children"], "Observation"].sum(),
-                    "total_elderly": x.loc[x["elderly"], "Observation"].sum(),
-                    "total_not_elderly": x.loc[~x["elderly"], "Observation"].sum(),
-                    "total_not_children": x.loc[~x["children"], "Observation"].sum()
-                }),
-                include_groups=False
-            )
-            .reset_index())
+        self.update_hydro()
+        self.update_depth()
 
-        age = age.melt(
-            id_vars=["Lower tier local authorities"],
-            var_name="category",
-            value_name="Observation"
-        )
+        self.update_emergency()
 
-        # Elderly rate
-        self.features['elderly'] = self.sample_beta(age, "category", "total_elderly", "total_not_elderly", observed['elderly_a'], observed['elderly_b'], "Observation")
+        self.update_deprived()
 
-        # Children rate
-        self.features['children'] = self.sample_beta(age, "category", "total_children", "total_not_children",observed['child_a'], observed['child_b'], "Observation")
-
+    # Calculate derived features
     def physical_vul(self): # high physicial = high risk
         weights = {
             "elevation_ratio": 0.30,
@@ -128,22 +90,22 @@ class Environment():
         }
 
         features = {
-            "elevation_ratio": self.features["grid"]["elevation_ratio"],
-            "impervious_ratio": self.features["grid"]["impervious_ratio"],
-            "water_dist_ratio": self.features["grid"]["water_dist_ratio"],
-            "water_dens_ratio": self.features["grid"]["water_dens_ratio"],
-            "road_dens_ratio": self.features["grid"]["road_dens_ratio"],
-            "road_dist_ratio": self.features["grid"]["road_dist_ratio"],
-            "building_age_ratio": self.features["building_age_ratio"],
+            "elevation_ratio": self.samples.features["grid"]["elevation_ratio"],
+            "impervious_ratio": self.samples.features["grid"]["impervious_ratio"],
+            "water_dist_ratio": self.samples.features["grid"]["water_dist_ratio"],
+            "water_dens_ratio": self.samples.features["grid"]["water_dens_ratio"],
+            "road_dens_ratio": self.samples.features["grid"]["road_dens_ratio"],
+            "road_dist_ratio": self.samples.features["grid"]["road_dist_ratio"],
+            "building_age_ratio": self.samples.features["building_age_ratio"],
         }
-        print(features)
+        #print(features)
 
         total_weight = sum(weights.values())
 
         self.derived["physical"] = (
             sum(weights[k] * features[k] for k in weights) / total_weight
         )
-        print(self.derived["physical"])
+        #print(self.derived["physical"])
 
     def socioeconomic_vul(self): # high socioeconomic = high risk
         weights = {
@@ -157,13 +119,13 @@ class Environment():
         }
 
         features = {
-            "elderly": self.features["elderly"], # high = high risk
-            "disabled": self.features["disabled"], # high = high risk
-            "children": self.features["children"], # high = high risk
-            "general_health": 1 - self.features["general_health"], # high = low risk (good health) (invert)
-            "english_proficiency": 1 - self.features["english_proficiency"], # high = low risk (proficient at english) (invert)
-            "household": self.household, # high = high risk
-            "property_value_norm": 1 - self.features["property_value_norm"], # low = high risk (CDF) (invert)
+            "elderly": self.samples.features["elderly"], # high = high risk
+            "disabled": self.samples.features["disabled"], # high = high risk
+            "children": self.samples.features["children"], # high = high risk
+            "general_health": 1 - self.samples.features["general_health"], # high = low risk (good health) (invert)
+            "english_proficiency": 1 - self.samples.features["english_proficiency"], # high = low risk (proficient at english) (invert)
+            "household": self.samples.features["household"], # high = high risk
+            "property_value_norm": 1 - self.samples.features["property_value_norm"], # low = high risk (CDF) (invert)
         }
 
         total_weight = sum(weights.values())
@@ -183,11 +145,11 @@ class Environment():
         }
 
         features = {
-            "response_time_norm": 1 - self.features["response_time_norm"], # long response time = high risk
-            "handover_time_norm": 1 - self.features["handover_time_norm"], # long handover time = high risk
-            "bed_occupancy": self.features["bed_occupancy"], # low bed occupancy = high risk (free beds)
-            "vehicle": self.features["vehicle_rate"], # low vehicle rate = high risk
-            "hospital_norm": 1 - self.features["grid"]["hospital_norm"],  # long distance = high risk
+            "response_time_norm": 1 - self.samples.features["response_time_norm"], # long response time = high risk
+            "handover_time_norm": 1 - self.samples.features["handover_time_norm"], # long handover time = high risk
+            "bed_occupancy": self.samples.features["bed_occupancy"], # low bed occupancy = high risk (free beds)
+            "vehicle": self.samples.features["vehicle_rate"], # low vehicle rate = high risk
+            "hospital_norm": 1 - self.samples.features["grid"]["hospital_norm"],  # long distance = high risk
         }
 
         total_weight = sum(weights.values())
@@ -204,8 +166,8 @@ class Environment():
         }
 
         features = {
-            "income_norm": self.features["income_norm"], # low income = high risk
-            "home_insure_rate": self.features["home_insure_rate"], # less home insurance = high risk
+            "income_norm": self.samples.features["income_norm"], # low income = high risk
+            "home_insure_rate": self.samples.features["home_insure_rate"], # less home insurance = high risk
         }
 
         total_weight = sum(weights.values())
@@ -220,12 +182,12 @@ class Environment():
         }
 
         features = {
-            "population_density_ratio": self.features["population_density_ratio"],
+            "population_density_ratio": self.samples.features["population_density_ratio"],
         }
 
         total_weight = sum(weights.values())
-        historic_factor = 1.2 if self.features["grid"]["historic"] else 1
-        holiday_factor = 1.1 if self.features["holiday"] else 1
+        historic_factor = 1.2 if self.samples.features["grid"]["historic"] else 1
+        holiday_factor = 1.1 if self.samples.features["holiday"] else 1
 
         self.derived["exposure"] = np.clip((
             (sum(weights[k] * features[k] for k in weights) / total_weight) * historic_factor * holiday_factor
@@ -236,7 +198,7 @@ class Environment():
         physical_impact = ( # no exposure or no damage = no physical impact
             self.derived["exposure"] # more exposure = high risk
             * self.derived["physical"] # high physical = high risk
-            * self.features["damage_fraction"] # high damage = high risk
+            * self.samples.features["damage_fraction"] # high damage = high risk
         )
 
         socio_impact = ( # reduce socio vulnerability if preparedness and recovery are high
@@ -246,147 +208,15 @@ class Environment():
         )
 
         self.impact = physical_impact + socio_impact
-
-    def init_prec(self, precipitation):
-        # 24-Hour Precipitation
-        rainfall = precipitation["rainfall"]
-        pct_zero = (rainfall == 0).sum() / len(rainfall)
-        zero_sample = np.random.binomial(n=1, p=pct_zero, size=1)[0]
-
-        rainfall_nonzero = precipitation.loc[precipitation["rainfall"] > 0, "rainfall"]
-        shape, loc, scale = gamma.fit(rainfall_nonzero)
-        self.features['precipitation'] = 0 if zero_sample == 1 else gamma.rvs(a=shape, loc=loc, scale=scale, size=1)[0]
-
-    def init_groundwater(self):
-        # Groundwater level
-        # mAOD
-        # add prec dependency, modify ground water level based on previous prec_sample
-        groundwater_files = [f for f in os.listdir(FILE_PATHS_DIR['groundwater_dir']) if f.lower().endswith(".csv")]
-        gw_file = random.choice(groundwater_files)
-        path = os.path.join(FILE_PATHS_DIR['groundwater_dir'], gw_file)
-        df = pd.read_csv(path)
-        values = pd.to_numeric(df["value"], errors="coerce").dropna()
-        a, loc, scale = skewnorm.fit(values)
-        self.features['groundwater'] = skewnorm.rvs(a, loc, scale, size=1)[0]
-
-    def init_river(self):
-        # River flow (WORK IN PREC)
-        # m3/s
-        # add prec dependency, modify ground water level based on previous prec_sample
-        river_flow_files = [f for f in os.listdir(FILE_PATHS_DIR['river_flow_dir']) if f.lower().endswith(".csv")]
-        rf_file = random.choice(river_flow_files)
-        path = os.path.join(FILE_PATHS_DIR['river_flow_dir'], rf_file)
-        df = pd.read_csv(path)
-        values = pd.to_numeric(df["value"], errors="coerce").dropna()
-        shape, loc, scale = gamma.fit(values, floc=0)
-        self.features['river_flow'] = gamma.rvs(a=shape, loc=loc, scale=scale, size=1)[0]
-
-        # River level (WORK IN PREC)
-        # m
-        # add prec dependency, modify ground water level based on previous prec_sample
-        file_prefix = rf_file.split('-')[0]
-        river_level_files = [f for f in os.listdir(FILE_PATHS_DIR['river_level_dir']) if f.lower().endswith(".csv")]
-        for f in river_level_files:
-            if file_prefix in f:
-                rl_file = f
-                break
-        path = os.path.join(FILE_PATHS_DIR['river_level_dir'], rl_file)
-        df = pd.read_csv(path)
-        values = pd.to_numeric(df["value"], errors="coerce").dropna()
-        shape, loc, scale = gamma.fit(values, floc=0)
-        self.features['river_level'] = gamma.rvs(a=shape, loc=loc, scale=scale, size=1)[0]
     
-    def init_soil_moisture(self):
-        # Soil moisture saturation (WORK IN PREC)
-        # Choose pixel that contains the overall grid cell chosen
-        # sample from normal distribution of time-series values for the pixel
-        # filters by season
-
-        cell_geom = self.features['grid']["geometry"]  # polygon of the sampled grid cell
-
-        # Load soil moisture rasters
-        tiff_files = sorted(glob.glob(os.path.join(FILE_PATHS_DIR['soil_moisture_dir'], "*.tif")))
-        season_tiffs = []
-
-        for f in tiff_files:
-            # Extract date from filename
-            date_str = f.split("_")[-1].replace(".tif", "")
-            file_date = dt.datetime.strptime(date_str, "%Y-%m-%d")
-            if file_date.month in SEASON_MONTHS[self.features['season']]:
-                season_tiffs.append(f)
-
-        # Load soil moisture rasters
-        stack = []
-        with rasterio.open(season_tiffs[0]) as src:
-            transform = src.transform
-            nodata = src.nodata
-            for f in season_tiffs:
-                with rasterio.open(f) as s:
-                    data = s.read(1).astype(np.float32)
-                    if nodata is not None:
-                        data[data == nodata] = np.nan
-                    stack.append(data)
-
-        stack = np.stack(stack, axis=0)  # shape: (time, rows, cols)
-
-        # Find the single pixel containing the centroid of the sampled grid cell
-        centroid_x, centroid_y = cell_geom.centroid.x, cell_geom.centroid.y
-        col, row = ~transform * (centroid_x, centroid_y)
-        row, col = int(row), int(col)
-
-        # Ensure row/col are within raster bounds
-        row = np.clip(row, 0, stack.shape[1]-1)
-        col = np.clip(col, 0, stack.shape[2]-1)
-
-        # Extract time series for that pixel
-        values = stack[:, row, col]
-        values = values[~np.isnan(values)]
-
-        # Fit normal distribution safely
-        if len(values) == 0:
-            self.features['soil_moisture'] = np.nan
-        else:
-            mu, sigma = norm.fit(values)
-            sigma = max(sigma, 1e-6)
-            self.features['soil_moisture'] = norm.rvs(mu, sigma)
-
-    def init_depth(self):
-        # Depth-damage
-        df = pd.read_csv(FILE_PATHS['depth_damage'])
-        depths = np.array([float(c) for c in df.columns[1:]])
-        # Compute overall damage fraction (mean across all types)
-        overall_damage = df.iloc[:, 1:].astype(float).mean(axis=0).values
-        # Fit the exponential model
-        params, _ = curve_fit(self.exp_damage, depths, overall_damage, bounds=(0, np.inf))
-        k = params[0]
-        # Add noise and ensures stays within bounds
-        self.features['damage_fraction'] = np.clip(self.exp_damage(self.features['depth'], k) + np.random.normal(0, 0.05), 0, 1)
-
-    def init_variable_samples(self):
-        dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
-
-        self.household, observed, self.features['home_insure_rate'], self.features['income_norm'] = generate_household_samples(10) # PLACEHOLDER VALUE
-        self.update_beta(observed, dfs['disabled'], dfs['general_health'], dfs['age'])
-        
-        self.init_prec(dfs['precipitation'])
-        self.init_groundwater()
-        self.init_river()
-        self.init_soil_moisture()
-        self.init_depth()
-
-        # Emergency response times
-        prec_factor = np.exp(self.features['precipitation'] / 50) 
-        self.features['response_time_norm'] = self.features['response_time_norm'] * prec_factor
-
-        # Derived
+    def update_deprived(self):
         self.physical_vul()
         self.socioeconomic_vul()
         self.preparedness()
         self.recovery()
         self.exposure()
-
-        # Impact score
         self.impact_score()
+
         
 '''np.random.seed(42)
 start = time.time()
@@ -397,14 +227,14 @@ print(temp.features)
 print(temp.household)
 print(temp.derived)
 print(temp.impact)
-# self.derived["exposure"], self.derived["physical"], self.derived["socioeconomic"], self.features["depth"], self.features["damage_fraction"], 1 - self.derived["preparedness"], "recovery": 1 - self.derived["recovery"], self.impact'''
+# self.derived["exposure"], self.derived["physical"], self.derived["socioeconomic"], self.samples.features["depth"], self.samples.features["damage_fraction"], 1 - self.derived["preparedness"], "recovery": 1 - self.derived["recovery"], self.impact'''
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 #np.random.seed(42)
 
-N = 20  # number of simulations
+N = 1  # number of simulations
 
 results = {
     "exposure": [],
@@ -420,7 +250,8 @@ results = {
 for i in range(N):
     print(i)
     temp = Environment()
-    temp.init_variable_samples()
+    print(temp.samples.features)
+    '''print(temp.features['precipitation'])
 
     results["exposure"].append(temp.derived["exposure"])
     results["physical"].append(temp.derived["physical"])
@@ -429,7 +260,7 @@ for i in range(N):
     results["damage_fraction"].append(temp.features["damage_fraction"])
     results["preparedness_inv"].append(temp.derived["preparedness"])
     results["recovery_inv"].append(temp.derived["recovery"])
-    results["impact"].append(temp.impact)
+    results["impact"].append(temp.impact)'''
 
 '''fig, axes = plt.subplots(2, 4, figsize=(16, 8))
 axes = axes.flatten()
