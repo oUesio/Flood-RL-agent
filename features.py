@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import lognorm, skewnorm, gamma
+from scipy.stats import lognorm, skewnorm, gamma, norm
 import os
 import random
 from datetime import datetime
@@ -8,6 +8,9 @@ from util import *
 from household import generate_household_samples
 from scipy.optimize import curve_fit
 import geopandas as gpd
+import rasterio
+import glob
+import datetime as dt
 
 class Sampler:
     def __init__(self):
@@ -23,7 +26,7 @@ class Sampler:
         time = sample_time_from_band(sampled)
 
         norm_time = np.clip(time / max_time, 0, 1)
-        return norm_time
+        return norm_time, time
 
     def sample_cell(self, noise_scale=0.05):
         grid = gpd.read_file(GRID_FILE)
@@ -34,35 +37,37 @@ class Sampler:
             "elevation", # lower elevation = more risk (water flows downhill)
             "impervious", # more impervious = more risk (less infiltration, more runoff)
             "historic", # flag
-            "road_dens", # less roads = more risk (better access, but less roads means less impervious)
+            "road_dens", # more roads = more risk (better access, but more roads means more impervious)
             "road_dist", # longer distance = more risk (harder access to evac)
             "hospital", # longer distance = more risk (slower emergency response)
         ]
         row = grid.sample(1).iloc[0]
-        sample = {}
-        eps=1e-6 # prevent zero division
         for f in features:
             val = row[f]
             if f == "historic":
-                sample["historic"] = val
+                self.features["historic"] = val
             else:
                 noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
                 s = max(val + noise, 0) # ensure positive
+
+                #### temp
+                self.features[f] = s
+                ####
+
                 mean = self.dfs['grid'][f].mean()
-                if f in ["impervious", "water_dens", "road_dist"]:
+                if f in ["impervious", "water_dens", "road_dist", "road_dens"]:
                     if f == "impervious":
                         s = max(0, min(s, 1))
-                        sample["impervious"] = s # fraction
-                    sample[f+'_ratio'] = s / mean
+                        self.features["impervious"] = s # fraction
+                    self.features[f+'_ratio'] = s / mean
                 elif f == 'hospital':
                     min_hosp = self.dfs['grid'][f].min()
                     max_hosp = self.dfs['grid'][f].max()
                     s = min(s, max_hosp) # ensure does not exceed max
-                    sample[f+'_norm'] = (s - min_hosp) / (max_hosp - min_hosp)
+                    self.features[f+'_norm'] = (s - min_hosp) / (max_hosp - min_hosp)
                 else:
-                    sample[f+'_ratio'] = mean / (s + eps)
-        sample["geometry"] = row.geometry
-        self.features["grid"] = sample
+                    self.features[f+'_ratio'] = mean / s
+        self.features["geometry"] = row.geometry
         return row
 
     def sample_flood_depth(self, row):
@@ -70,19 +75,23 @@ class Sampler:
         bins = [(0.0, 0.0), (0., 0.2), (0.2, 0.3), (0.3, 0.6), (0.6, 0.9), (0.9, 1.2), (1.2, np.inf)]
 
         # Build the probs dict
-        probs = {
+        '''probs = {
             bin_range: float(row[col])
             for bin_range, col in zip(bins, prob_cols)
-        }
+        }'''
 
-        range_probs = np.array(list(probs.values()))
-        range_index = np.random.choice(len(bins), p=range_probs)
-        low, high = bins[range_index]
+        probs = np.array([row[c] for c in prob_cols], dtype=float)
+        probs = probs / probs.sum()
+
+        #range_probs = np.array(list(probs.values()))
+        #range_index = np.random.choice(len(bins), p=range_probs)
+        #low, high = bins[range_index]
+        low, high = bins[np.random.choice(len(bins), p=probs)]
 
         if low == 0.0 and high == 0.0:
             depth = 0.0
         elif np.isinf(high):
-            depth = low + np.random.exponential(scale=0.3)
+            depth = min(low + np.random.exponential(scale=0.3), 3) # max 3m depth
         else:
             depth = np.random.uniform(low, high)
         self.features["depth"] = depth
@@ -112,6 +121,11 @@ class Sampler:
         shape, loc, scale = skewnorm.fit(log_price)
 
         sample_value = np.exp(skewnorm.rvs(shape, loc=loc, scale=scale, size=1)[0])
+
+        #### temp
+        self.features["property_value"] = sample_value
+        ####
+
         cdf_value = skewnorm.cdf(np.log(sample_value), shape, loc=loc, scale=scale)
         self.features["property_value_norm"] = cdf_value
 
@@ -146,9 +160,15 @@ class Sampler:
         sample_year = int(np.random.normal(loc=mean_year, scale=std_year))
         sample_year = min(sample_year, current_year) # ensure not a future year
         building_age = current_year - sample_year
+
+        #### temp
+        self.features["building_age"] = building_age
+        ####
+
         self.features["building_age_ratio"] = building_age / mean_building_age
 
     def sample_emergency_response(self, popden_mean, popden_sample):
+        response_dist = {}
         response = self.dfs["response_times"]
         months = SEASON_MONTHS_FULL[self.features["season"]]
         response_season = response[response["month"].isin(months)]
@@ -165,17 +185,29 @@ class Sampler:
         )
 
         data = c2 if category == "C2" else c3
-        shape, loc, scale = lognorm.fit(data, floc=0)
-        response_sample = lognorm.rvs(shape, loc=loc, scale=scale)
+        response_dist['shape'], response_dist['loc'], response_dist['scale'] = lognorm.fit(data, floc=0)
+        response_sample = lognorm.rvs(response_dist['shape'], loc=response_dist['loc'], scale=response_dist['scale'])
 
-        data_min = data.min()
-        data_max = data.max()
+        response_dist['data_min'] = data.min()
+        response_dist['data_max'] = data.max()
 
-        popden_factor = 1 + 0.5 * ((popden_mean - popden_sample) / popden_mean)
+        response_dist['popden_factor'] = 1 + 0.5 * ((popden_mean - popden_sample) / popden_mean)
         prec_factor = np.exp(self.features['precipitation'] / 50) 
+
+        road = self.features['road_dist_ratio']
+        road_factor = 1 + 0.25 * np.log1p(road)
+        road_factor = np.clip(road_factor, 1.0, 1.6)
+        #print(road)
+        #print(road_factor)
+
+        #### temp
+        self.features["response_time"] = response_sample * response_dist['popden_factor'] * prec_factor * road_factor
+        ####
+
         self.features["response_time_norm"] = (
-            (response_sample * popden_factor * prec_factor - data_min) / (data_max - data_min)
+            (response_sample * response_dist['popden_factor'] * prec_factor * road_factor - response_dist['data_min']) / (response_dist['data_max'] - response_dist['data_min'])
         ).clip(0, 1) # longer delays = more risk
+        self.dist_params['response_time'] = response_dist
 
     def sample_ambulance_handover(self):
         handover = self.dfs["ambulance_handover"]
@@ -193,7 +225,7 @@ class Sampler:
 
         counts = handover_season[["Under 15 min", "15–30 min", "30–60 min", "Over 60 min"]].sum()
         handover_probs = counts / counts.sum()
-        self.features["handover_time_norm"] = self.sample_handover_time(handover_probs)
+        self.features["handover_time_norm"], self.features["handover_time"] = self.sample_handover_time(handover_probs) ### temp
 
     def sample_hospital_bed(self):
         beds = self.dfs["hospital_beds"]
@@ -267,24 +299,72 @@ class Sampler:
         rainfall_nonzero = rainfall[rainfall > 0]
         prec_dist['shape'], prec_dist['loc'], prec_dist['scale'] = gamma.fit(rainfall_nonzero)
         self.features['precipitation'] = 0 if zero_sample == 1 else gamma.rvs(a=prec_dist['shape'], loc=prec_dist['loc'], scale=prec_dist['scale'], size=1)[0]
- 
         self.dist_params['precipitation'] = prec_dist
 
     def sample_river(self):
         # River level
         # m
+        river_dist = {}
         river_level_files = [f for f in os.listdir(FILE_PATHS_DIR['river_level_dir']) if f.lower().endswith(".csv")]
         rl_file = random.choice(river_level_files)
         path = os.path.join(FILE_PATHS_DIR['river_level_dir'], rl_file)
         df = pd.read_csv(path)
         values = pd.to_numeric(df["value"], errors="coerce").dropna()
-        shape, loc, scale = gamma.fit(values, floc=0)
-        self.features['river_level'] = gamma.rvs(a=shape, loc=loc, scale=scale, size=1)[0]
+        river_dist['shape'], river_dist['loc'], river_dist['scale'] = gamma.fit(values, floc=0)
+        self.features['river_level'] = gamma.rvs(a=river_dist['shape'], loc=river_dist['loc'], scale=river_dist['scale'], size=1)[0]
+        self.dist_params['river'] = river_dist
+
+    def sample_soil_moisture(self):
+        # Soil moisture saturation
+        cell_geom = self.features["geometry"]  # polygon of the sampled grid cell
+
+        # Load soil moisture rasters
+        tiff_files = sorted(glob.glob(os.path.join(FILE_PATHS_DIR['soil_moisture_dir'], "*.tif")))
+        season_tiffs = []
+
+        for f in tiff_files:
+            # Extract date from filename
+            date_str = f.split("_")[-1].replace(".tif", "")
+            file_date = dt.datetime.strptime(date_str, "%Y-%m-%d")
+            if file_date.month in SEASON_MONTHS[self.features['season']]:
+                season_tiffs.append(f)
+
+        # Load soil moisture rasters
+        stack = []
+        with rasterio.open(season_tiffs[0]) as src:
+            transform = src.transform
+            nodata = src.nodata
+            for f in season_tiffs:
+                with rasterio.open(f) as s:
+                    data = s.read(1).astype(np.float32)
+                    if nodata is not None:
+                        data[data == nodata] = np.nan
+                    stack.append(data)
+
+        stack = np.stack(stack, axis=0)  # shape: (time, rows, cols)
+
+        # Find the single pixel containing the centroid of the sampled grid cell
+        centroid_x, centroid_y = cell_geom.centroid.x, cell_geom.centroid.y
+        col, row = ~transform * (centroid_x, centroid_y)
+        row, col = int(row), int(col)
+
+        # Ensure row/col are within raster bounds
+        row = np.clip(row, 0, stack.shape[1]-1)
+        col = np.clip(col, 0, stack.shape[2]-1)
+
+        # Extract time series for that pixel
+        values = stack[:, row, col]
+        values = values[~np.isnan(values)]
+
+        mu, sigma = norm.fit(values)
+        sigma = max(sigma, 1e-6)
+        self.features['soil_moisture'] = norm.rvs(mu, sigma)
 
     def generate_feature_samples(self):     
         self.features["season"] = random.choice(list(SEASON_MONTHS))
 
-        self.features["household"], observed, self.features['home_insure_rate'], self.features['income_norm'] = generate_household_samples(10)
+        household_features, observed = generate_household_samples(100)
+        self.features |= household_features
 
         self.features['disabled'] = sample_beta_observed(self.dfs["disabled"], 'Disability (3 categories)', 'Disabled under the Equality Act', 'Not disabled under the Equality Act', observed['disable_a'], observed['disable_b'], 'Observation')
         
@@ -298,6 +378,7 @@ class Sampler:
 
         probs = self.dfs["urban"]["Urban_rural_flag"].value_counts(normalize=True)
         self.features["urban"] = np.random.binomial(1, probs["Urban"])
+        
         popden_mean, popden_sample = self.sample_population_density()
 
         self.sample_mean_property()
@@ -305,6 +386,8 @@ class Sampler:
         self.sample_building_age()
 
         self.features["holiday"] = int(random.random() < (28 / 365))
+
+        row = self.sample_cell()
 
         self.sample_emergency_response(popden_mean, popden_sample)
 
@@ -319,7 +402,7 @@ class Sampler:
         vehicle = self.dfs["vehicle"]
         self.features["vehicle_rate"] = sample_beta(vehicle, "Car or van availability (3 categories)", "1 or more cars or vans in household", "No cars or vans in household", "Observation")
 
-        row = self.sample_cell()
+        self.sample_soil_moisture()
 
         self.sample_flood_depth(row)
 

@@ -29,7 +29,6 @@ FILE_PATHS_DIR = {
     "river_flow_dir": "data/river_flow",
     "river_level_dir": "data/river_level",
     "soil_moisture_dir": "data/soil_moisture",
-    "flood_risk_dir": "data/flood_risk",
 }
 
 SEASON_MONTHS = {

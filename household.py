@@ -163,6 +163,7 @@ def generate_household_samples(num_households: int) -> list[float]:
     #risk_scores = []
     total_risk = 0
     dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
+    features = {}
     observed = {
         "disable_a": 0,
         "disable_b": 0,
@@ -175,6 +176,11 @@ def generate_household_samples(num_households: int) -> list[float]:
     }
     total_home_insure = 0
     total_income_norm = 0
+
+    ### temp
+    total_deprived = 0
+    total_low = 0
+    ###
 
     for _ in range(num_households):
         # General household variables
@@ -239,6 +245,8 @@ def generate_household_samples(num_households: int) -> list[float]:
         income_sample *= NSSEC[nssec_sample] # scale for the low income sample
         median_income = income_df['Total annual income (£)'].median()
         low_income_sample = int(income_sample < 0.6 * median_income)
+
+        total_low += low_income_sample  ### temp
 
         # Household composition
         num_adults_sample = sample_from_csv(FILE_PATHS["household_employed"],
@@ -306,6 +314,8 @@ def generate_household_samples(num_households: int) -> list[float]:
             dep_housing_sample == 'Household is deprived in the housing dimension'
         ])
 
+        total_deprived += household_dep_sample  ### temp
+
         # Tenure & insurance
         tenure_sample = sample_from_csv(FILE_PATHS["tenure"],
                                        'Tenure of household (7 categories)',
@@ -357,7 +367,16 @@ def generate_household_samples(num_households: int) -> list[float]:
 
         '''print(household_risk)
         print('========')'''
-    return total_risk / num_households, observed, total_home_insure / num_households, total_income_norm / num_households
+    features["household"] = household_risk = total_risk / num_households
+    features['home_insure_rate'] = total_home_insure / num_households
+    features['income_norm'] = total_income_norm / num_households
+
+    ### temp
+    features['deprived'] = total_deprived / num_households
+    features['low_income'] = total_low / num_households
+    ###
+
+    return features, observed
 
 '''#np.random.seed(42)
 for x in range(3):
