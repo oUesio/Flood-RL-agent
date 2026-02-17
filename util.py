@@ -45,14 +45,24 @@ SEASON_MONTHS_FULL = {
     "Winter": ["December", "January", "February"],
 }
 
+BUCKET_RANGES = {
+    "BP_PRE_1900": (1800, 1899),
+    "BP_1900_1918": (1900, 1918),
+    "BP_1919_1929": (1919, 1929),
+    "BP_1930_1939": (1930, 1939),
+    "BP_1945_1954": (1945, 1954),
+    "BP_1955_1964": (1955, 1964),
+    "BP_1965_1972": (1965, 1972),
+    "BP_1973_1982": (1973, 1982),
+    "BP_1983_1992": (1983, 1992),
+    "BP_1993_1999": (1993, 1999),
+    "BP_2000_2009": (2000, 2009),
+    "BP_2010_2015": (2010, 2015),
+}
+
 def hhmmss_to_hours(time_str: str) -> float:
     h, m, s = map(int, time_str.split(":"))
     return h + m / 60 + s / 3600
-
-
-def trunc_normal(low, high, mean, sd):
-    a, b = (low - mean) / sd, (high - mean) / sd
-    return truncnorm.rvs(a, b, loc=mean, scale=sd)
 
 def map_proficiency(category):
     if category in [
@@ -64,16 +74,6 @@ def map_proficiency(category):
         return "Bad English Proficiency"
     else:
         return None
-    
-def sample_time_from_band(band):
-    if band == "Under 15 min":
-        return trunc_normal(0, 15, mean=8, sd=3)
-    if band == "15–30 min":
-        return trunc_normal(15, 30, mean=22, sd=4)
-    if band == "30–60 min":
-        return trunc_normal(30, 60, mean=45, sd=7)
-    if band == "Over 60 min":
-        return 60 + np.random.exponential(scale=20)
     
 def sample_beta(df, category_col, a, b, value_col):
     total = df.groupby(category_col)[value_col].sum()

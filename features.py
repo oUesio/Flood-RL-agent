@@ -19,15 +19,6 @@ class Sampler:
         self.dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
         self.generate_feature_samples()
 
-    def sample_handover_time(self, probs, max_time=120):
-        bands = probs.index.to_numpy()
-        p = probs.to_numpy()
-        sampled = np.random.choice(bands, size=1, p=p)
-        time = sample_time_from_band(sampled)
-
-        norm_time = np.clip(time / max_time, 0, 1)
-        return norm_time, time
-
     def sample_cell(self, noise_scale=0.05):
         grid = gpd.read_file(GRID_FILE)
         self.dfs['grid'] = grid
@@ -64,7 +55,7 @@ class Sampler:
                     min_hosp = self.dfs['grid'][f].min()
                     max_hosp = self.dfs['grid'][f].max()
                     s = min(s, max_hosp) # ensure does not exceed max
-                    self.features[f+'_norm'] = (s - min_hosp) / (max_hosp - min_hosp)
+                    self.features[f+'_norm'] = max(0, min((s - min_hosp) / (max_hosp - min_hosp), 1)) # 0-1 range
                 else:
                     self.features[f+'_ratio'] = mean / s
         self.features["geometry"] = row.geometry
@@ -130,42 +121,26 @@ class Sampler:
         self.features["property_value_norm"] = cdf_value
 
     def sample_building_age(self):
-        building_age = self.dfs["property_age"]
-        age_columns = [
-            "BP_PRE_1900","BP_1900_1918","BP_1919_1929","BP_1930_1939",
-            "BP_1945_1954","BP_1955_1964","BP_1965_1972","BP_1973_1982",
-            "BP_1983_1992","BP_1993_1999","BP_2000_2009","BP_2010_2015"
-        ]
-        age_totals = building_age[age_columns].sum()
-        year_counts = {}
-
-        for col, count in age_totals.items():
-            if col == "BP_PRE_1900":
-                years = range(1850, 1900)
-            else:
-                a, b = map(int, col.split("_")[1:])
-                years = range(a, b + 1)
-
-            for y in years:
-                year_counts[y] = year_counts.get(y, 0) + count / len(years)
-
-        years = np.array(list(year_counts.keys()))
-        counts = np.array(list(year_counts.values()))
-        counts /= counts.sum()
-
+        age_cols = list(BUCKET_RANGES)
         current_year = datetime.now().year
-        mean_year = np.sum(years * counts)
-        mean_building_age = current_year - mean_year
-        std_year = np.sqrt(np.sum(counts * (years - mean_year)**2))
-        sample_year = int(np.random.normal(loc=mean_year, scale=std_year))
-        sample_year = min(sample_year, current_year) # ensure not a future year
-        building_age = current_year - sample_year
 
-        #### temp
-        self.features["building_age"] = building_age
-        ####
+        counts = self.dfs["property_age"][age_cols].sum().to_numpy()
 
-        self.features["building_age_ratio"] = building_age / mean_building_age
+        mids = np.array([(start + end) / 2 for start, end in BUCKET_RANGES.values()])
+        mean_construction_year = np.dot(counts, mids) / counts.sum()
+        mean_building_age = current_year - mean_construction_year
+
+        probs = counts / counts.sum()
+        bucket = np.random.choice(age_cols, p=probs)
+
+        start, end = BUCKET_RANGES[bucket]
+        sampled_year = np.random.randint(start, end + 1)
+        sampled_age = current_year - sampled_year
+
+
+        self.features["building_age"] = sampled_age
+
+        self.features["building_age_ratio"] = sampled_age / mean_building_age
 
     def sample_emergency_response(self, popden_mean, popden_sample):
         response_dist = {}
@@ -191,24 +166,42 @@ class Sampler:
         response_dist['data_min'] = data.min()
         response_dist['data_max'] = data.max()
 
-        response_dist['popden_factor'] = 1 + 0.5 * ((popden_mean - popden_sample) / popden_mean)
-        prec_factor = np.exp(self.features['precipitation'] / 50) 
+        # Population density scale factor
+        log_pop = np.log1p(popden_sample)
+        log_min = np.log1p(4) # min population density from data
+        log_max = np.log1p(2561) # max population density from data
 
+        scaled = (log_pop - log_min) / (log_max - log_min) # 0–1
+        response_dist['popden_factor'] = 0.8 + 0.4 * (1 - scaled) # 0.8–1.2 range
+
+        # Precipitation scale factor
+        log_prec = np.log1p(self.features['precipitation'])
+        log_min = np.log1p(0)
+        log_max = np.log1p(54.62507)
+
+        scaled = (log_prec - log_min) / (log_max - log_min) # 0–1
+        prec_factor = 1 + 0.5 * scaled # 1–1.5 range
+
+
+        # Road distance scale factor
         road = self.features['road_dist_ratio']
-        road_factor = 1 + 0.25 * np.log1p(road)
-        road_factor = np.clip(road_factor, 1.0, 1.6)
-        #print(road)
-        #print(road_factor)
+        road_mean = 0.568015 # mean of grid values
+        road_factor = 1 + 0.35 * (np.log1p(road) - np.log1p(road_mean))
+        road_factor = np.clip(road_factor, 0.75, 1.35)
 
         #### temp
         self.features["response_time"] = response_sample * response_dist['popden_factor'] * prec_factor * road_factor
         ####
+        
+        print(f"Pop den: {popden_sample}, Prec: {self.features['precipitation']}, Road: {self.features['road_dist_ratio']}")
+        print(f"Pop den factor: {response_dist['popden_factor']}, Prec factor: {prec_factor}, , Road factor: {road_factor}")
+        print(f"Full factor: {response_dist['popden_factor'] * prec_factor * road_factor}, Orginal response: {response_sample}, Scaled response: {self.features['response_time']}")
 
         self.features["response_time_norm"] = (
             (response_sample * response_dist['popden_factor'] * prec_factor * road_factor - response_dist['data_min']) / (response_dist['data_max'] - response_dist['data_min'])
         ).clip(0, 1) # longer delays = more risk
         self.dist_params['response_time'] = response_dist
-
+    
     def sample_ambulance_handover(self):
         handover = self.dfs["ambulance_handover"]
 
@@ -225,7 +218,26 @@ class Sampler:
 
         counts = handover_season[["Under 15 min", "15–30 min", "30–60 min", "Over 60 min"]].sum()
         handover_probs = counts / counts.sum()
-        self.features["handover_time_norm"], self.features["handover_time"] = self.sample_handover_time(handover_probs) ### temp
+        band = np.random.choice(handover_probs.index, p=handover_probs.values)
+
+        max_time=120
+        if band == "Under 15 min":
+            time = np.random.uniform(0, 15)
+
+        elif band == "15–30 min":
+            time = np.random.uniform(15, 30)
+
+        elif band == "30–60 min":
+            time = np.random.uniform(30, 60)
+        else: # Over 60 min
+            while True: # Resample until valid
+                sample = 60 + np.random.exponential(scale=20)
+                if sample <= max_time:
+                    time = sample
+                    break
+        
+        self.features["handover_time"] = time
+        self.features["handover_time_norm"] = np.clip(time / max_time, 0, 1)
 
     def sample_hospital_bed(self):
         beds = self.dfs["hospital_beds"]
