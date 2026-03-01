@@ -9,7 +9,6 @@ class Environment():
         self.warning_issued = False
         self.impact = None
         self.samples = Sampler()
-        self.update_deprived()
 
     def update_prec(self):
         prec_dist = self.samples.features.dist_params['precipitation']
@@ -260,6 +259,9 @@ class Environment():
         )
 
         self.impact = physical_impact + socio_impact
+
+    def sample_features(self):
+        self.samples.sample_features()
     
     def update_deprived(self):
         self.physical_vul()

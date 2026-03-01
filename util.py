@@ -60,6 +60,17 @@ BUCKET_RANGES = {
     "BP_2010_2015": (2010, 2015),
 }
 
+GRID_FEATURES = [
+    "water_dens", # more water = more risk (more water)
+    "water_dist", # shorter distance = more risk (closer to river increases exposure)
+    "elevation", # lower elevation = more risk (water flows downhill)
+    "impervious", # more impervious = more risk (less infiltration, more runoff)
+    "historic", # flag
+    "road_dens", # more roads = more risk (better access, but more roads means more impervious)
+    "road_dist", # longer distance = more risk (harder access to evac)
+    "hospital", # longer distance = more risk (slower emergency response)
+]
+
 def hhmmss_to_hours(time_str: str) -> float:
     h, m, s = map(int, time_str.split(":"))
     return h + m / 60 + s / 3600
