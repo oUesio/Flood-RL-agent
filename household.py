@@ -1,18 +1,17 @@
+import itertools
 import pandas as pd
 import numpy as np
 from scipy.stats import skewnorm
 
-# ======================
-# File paths
-# ======================
 FILE_PATHS = {
     "disability": "data/disabled.csv",
     "general_health": "data/general_health.csv",
     "age": "data/age.csv",
     "qualification": "data/qualification-age.csv",
-    "accommodation": "data/accomodation_type.csv",
+    "accommodation": "data/accommodation_type.csv",
     "household_size": "data/household_size.csv",
     "economic_activity": "data/nssec_economic_age.csv",
+    "nssec": "data/nssec_economic_age.csv",
     "mean_income": "data/mean_income.csv",
     "household_employed": "data/household_employed_size.csv",
     "household_disabled": "data/household_disabled_size.csv",
@@ -26,9 +25,6 @@ FILE_PATHS = {
     "tenure": "data/tenure.csv"
 }
 
-# ======================
-# Risk maps & weights
-# ======================
 TENURE_RISK = {
     "Owned: Owns outright": 0.0,
     "Owned: Owns with a mortgage or loan or shared ownership": 0.1,
@@ -74,147 +70,99 @@ WEIGHTS = {
     "health_insure_risk": 0.04,
 }
 
-# ======================
-# Helper functions
-# ======================
-def sample_categorical_census(df: pd.DataFrame, category_col: str, value_col: str, ignore_categories: list):
-    """Sample from a categorical distribution."""
-    if ignore_categories:
-        df = df[~df[category_col].isin(ignore_categories)]
+NSSEC_MULTIPLIERS = {
+    "L1, L2 and L3: Higher managerial, administrative and professional occupations": 1.90,
+    "L4, L5 and L6: Lower managerial, administrative and professional occupations": 1.35,
+    "L7: Intermediate occupations": 1.00,
+    "L8 and L9: Small employers and own account workers": 1.10,
+    "L10 and L11: Lower supervisory and technical occupations": 0.90,
+    "L12: Semi-routine occupations": 0.75,
+    "L13: Routine occupations": 0.65,
+    "L14.1 and L14.2: Never worked and long-term unemployed": 0.40,
+    "L15: Full-time students": 0.35,
+    "Does not apply": 0.00
+}
 
-    totals = df.groupby(category_col)[value_col].sum()
-    probs = totals / totals.sum()
-    samples = np.random.choice(
-        probs.index.to_numpy(),
-        size=1,
-        p=probs.to_numpy()
-    )
 
-    return samples[0]
+class Household:
+    def __init__(self):
+        # Resampling
+        self.categorical_census_probs = {}
+        self.income_params = {}
+        self.weight_sum = sum(WEIGHTS.values())
 
-def sample_from_csv(
-    filepath: str,
-    category_col: str,
-    value_col: str = "Observation",
-    filters: dict = None,
-    ignore_categories: list = None
-):
-    """Filter CSV by optional filters and sample a category."""
-    df = pd.read_csv(filepath)
-    if filters:
-        for col, val in filters.items():
-            df = df[df[col] == val]
-    return sample_categorical_census(df, category_col, value_col, ignore_categories or [])
+        self.dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
 
-def calculate_household_risk(
-    tenure_sample, acco_sample, size_sample, internet_sample, deprivation_sample, 
-    low_income_sample, home_insure_sample, health_insure_sample
-) -> float:
-    tenure_risk = TENURE_RISK[tenure_sample]
-    acco_risk = ACCO_RISK[acco_sample]
-    size_risk = SIZE_RISK[size_sample]
-    internet_risk = INTERNET_RISK[internet_sample]
-    deprivation_risk = DEPRIVATION_RISK[deprivation_sample]
-    low_income_risk = LOW_INCOME_RISK[low_income_sample]
-    home_insure_risk = HOME_INSURE_RISK[home_insure_sample]
-    health_insure_risk = HEALTH_INSURE_RISK[health_insure_sample]
+        self.init_categories()
+        self.init_income()
 
-    risk_score = (
-        WEIGHTS["tenure_risk"] * tenure_risk +
-        WEIGHTS["acco_risk"] * acco_risk +
-        WEIGHTS["size_risk"] * size_risk +
-        WEIGHTS["internet_risk"] * internet_risk +
-        WEIGHTS["deprivation_risk"] * deprivation_risk +
-        WEIGHTS["low_income_risk"] * low_income_risk +
-        WEIGHTS["home_insure_risk"] * home_insure_risk +
-        WEIGHTS["health_insure_risk"] * health_insure_risk
-    ) 
-    risk_score = risk_score / sum(WEIGHTS.values())
-    noise = np.random.normal(0, 0.01)
 
-    '''print(
-    f"""
-    HOUSEHOLD RISK BREAKDOWN
-    -----------------------
-    Tenure risk           : value={tenure_risk:.2f}, weight={WEIGHTS['tenure_risk']:.2f}, contrib={tenure_risk * WEIGHTS['tenure_risk']:.3f}
-    Accommodation risk    : value={acco_risk:.2f}, weight={WEIGHTS['acco_risk']:.2f}, contrib={acco_risk * WEIGHTS['acco_risk']:.3f}
-    Household size risk   : value={size_risk:.2f}, weight={WEIGHTS['size_risk']:.2f}, contrib={size_risk * WEIGHTS['size_risk']:.3f}
-    Internet access risk  : value={internet_risk:.2f}, weight={WEIGHTS['internet_risk']:.2f}, contrib={internet_risk * WEIGHTS['internet_risk']:.3f}
-    Deprivation risk      : value={deprivation_risk:.2f}, weight={WEIGHTS['deprivation_risk']:.2f}, contrib={deprivation_risk * WEIGHTS['deprivation_risk']:.3f}
-    Low income risk       : value={low_income_risk:.2f}, weight={WEIGHTS['low_income_risk']:.2f}, contrib={low_income_risk * WEIGHTS['low_income_risk']:.3f}
-    Home insurance risk   : value={home_insure_risk:.2f}, weight={WEIGHTS['home_insure_risk']:.2f}, contrib={home_insure_risk * WEIGHTS['home_insure_risk']:.3f}
-    Health insurance risk : value={health_insure_risk:.2f}, weight={WEIGHTS['health_insure_risk']:.2f}, contrib={health_insure_risk * WEIGHTS['health_insure_risk']:.3f}
-
-    BASE RISK SCORE (no noise): {risk_score:.3f}
-    FINAL RISK SCORE (with noise): {np.clip(risk_score + noise, 0, 1):.3f}
-    """
-    )'''
-    return np.clip(risk_score + noise, 0, 1)
-
-# ======================
-# Load all CSVs once
-# ======================
-
-def generate_household_samples(num_households: int) -> list[float]:
-    """
-    Generate household samples and compute a household risk score for each.
-    Returns a list of risk scores.
-    """
-    #risk_scores = []
-    total_risk = 0
-    dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
-    features = {}
-    observed = {
-        "disable_a": 0,
-        "disable_b": 0,
-        "elderly_a": 0,
-        "elderly_b": 0,
-        "child_a": 0,
-        "child_b": 0,
-        "health_a": 0,
-        "health_b": 0,
-    }
-    total_home_insure = 0
-    total_income_norm = 0
-
-    ### temp
-    total_deprived = 0
-    total_low = 0
-    ###
-
-    for _ in range(num_households):
-        # General household variables
-        age_sample = sample_from_csv(FILE_PATHS["age"], 'Age (6 categories)')
-        if age_sample == 'Aged 65 years and over':
-            observed['elderly_a'] += 1 # is elderly
+    def calculate_household_risk(self, tenure_sample, acco_sample, size_sample, internet_sample, deprivation_sample, low_income_sample, home_insure_sample, health_insure_sample):
+        risk_score = (
+            WEIGHTS["tenure_risk"] * TENURE_RISK[tenure_sample] +
+            WEIGHTS["acco_risk"] * ACCO_RISK[acco_sample] +
+            WEIGHTS["size_risk"] * SIZE_RISK[size_sample] +
+            WEIGHTS["internet_risk"] * INTERNET_RISK[internet_sample] +
+            WEIGHTS["deprivation_risk"] * DEPRIVATION_RISK[deprivation_sample] +
+            WEIGHTS["low_income_risk"] * LOW_INCOME_RISK[low_income_sample] +
+            WEIGHTS["home_insure_risk"] * HOME_INSURE_RISK[home_insure_sample] +
+            WEIGHTS["health_insure_risk"] * HEALTH_INSURE_RISK[health_insure_sample]
+        )
+        risk_score = risk_score / self.weight_sum
+        return np.clip(risk_score + np.random.normal(0, 0.01), 0, 1)
+    
+    def init_categorical_census(self, category, category_col, value_col="Observation", filters=None, ignore=None):
+        filters = filters or []
+        ignore = ignore or []
+        df = self.dfs[category]
+        if not filters: 
+            totals = df.groupby(category_col)[value_col].sum()
+            totals = totals[~totals.index.isin(ignore)] # remove ignore only for the category_col
+            self.categorical_census_probs[category] = totals / totals.sum()
         else:
-            observed['elderly_b'] += 1 # is not elderly
-        if age_sample == 'Aged 15 years and under':
-            observed['child_a'] += 1 # is child
+            probs = {}
+            filter_values = [[v for v in df[col].unique()] for col in filters]
+            for combo in itertools.product(*filter_values):
+                key = tuple(combo)
+                filtered = df
+                for col, val in zip(filters, combo):
+                    filtered = filtered[filtered[col] == val]
+                totals = filtered.groupby(category_col)[value_col].sum()
+                totals = totals[~totals.index.isin(ignore)]
+                probs[key] = totals / totals.sum()
+            self.categorical_census_probs[category] = probs
+
+    def init_categories(self):
+        self.init_categorical_census("age", 'Age (6 categories)')
+        self.init_categorical_census("qualification", 'Highest level of qualification (7 categories)', filters=['Age (6 categories)'])
+        self.init_categorical_census("accommodation", 'Accommodation type (5 categories)')
+        self.init_categorical_census("household_size", 'Household size (5 categories)', ignore=['0 people in household'])
+        self.init_categorical_census("economic_activity", 'Economic activity status (4 categories)', filters=['Age (6 categories)'])
+        self.init_categorical_census("nssec", 'National Statistics Socio-economic Classification (NS-SeC) (10 categories)', filters=['Age (6 categories)', 'Economic activity status (4 categories)'])
+        self.init_categorical_census("household_employed", 'Number of adults in employment in household (5 categories)', filters=['Household size (5 categories)'], ignore=['Does not apply'])
+        self.init_categorical_census("household_disabled", 'Number of disabled people in household (4 categories)', filters=['Household size (5 categories)'], ignore=['Does not apply'])
+        self.init_categorical_census("household_longterm", 'Number of people in household with a long-term heath condition but are not disabled (4 categories)', filters=['Household size (5 categories)'], ignore=['Does not apply'])
+        self.init_categorical_census("deprived_education", 'Household deprived in the education dimension (3 categories)', filters=['Highest level of qualification (7 categories)'], ignore=['Does not apply'])
+        self.init_categorical_census("deprived_employment", 'Household deprived in the employment dimension (3 categories)', filters=['Number of adults in employment in household (5 categories)', 'National Statistics Socio-economic Classification (NS-SeC) (10 categories)'])
+        self.init_categorical_census("deprived_health", 'Household deprived in the health and disability dimension (3 categories)', filters=['Number of people in household with a long-term heath condition but are not disabled (4 categories)', 'Number of disabled people in household (4 categories)'])
+        self.init_categorical_census("people_per_room", 'Number of people per room in household (5 categories)', filters=['Household size (5 categories)'], ignore=['Does not apply'])
+        self.init_categorical_census("occupancy", 'Occupancy rating for rooms (5 categories)', filters=['Number of people per room in household (5 categories)'], ignore=['Does not apply'])
+        self.init_categorical_census("deprived_housing", 'Household deprived in the housing dimension (3 categories)', filters=['Number of people per room in household (5 categories)','Occupancy rating for rooms (5 categories)'], ignore=['Does not apply'])
+        self.init_categorical_census("tenure", 'Tenure of household (7 categories)', ignore=['Does not apply'])
+
+    def sample_categorical_census(self, category, filters=None):
+        filters = filters or []
+        if filters:
+            lookup_key =  tuple(filters)
+            probs = self.categorical_census_probs[category][lookup_key]
         else:
-            observed['child_b'] += 1 # is not child
+            probs = self.categorical_census_probs[category]
 
-        qual_sample = sample_from_csv(FILE_PATHS["qualification"],
-                                      'Highest level of qualification (7 categories)',
-                                      filters={'Age (6 categories)': age_sample})
-
-        acco_type_sample = sample_from_csv(FILE_PATHS["accommodation"], 'Accommodation type (5 categories)')
-
-        house_size_sample = sample_from_csv(FILE_PATHS["household_size"],
-                                            'Household size (5 categories)',
-                                            ignore_categories=['0 people in household'])
-
-        eas_sample = sample_from_csv(FILE_PATHS["economic_activity"],
-                                     'Economic activity status (4 categories)',
-                                     filters={'Age (6 categories)': age_sample})
-
-        nssec_sample = sample_from_csv(FILE_PATHS["economic_activity"],
-                                       'National Statistics Socio-economic Classification (NS-SeC) (10 categories)',
-                                       filters={'Age (6 categories)': age_sample,
-                                                'Economic activity status (4 categories)': eas_sample})
-
-        # Income
-        income_df = dfs["mean_income"].copy()
+        return np.random.choice(probs.index.to_numpy(), size=1, p=probs.to_numpy())[0]
+    
+    def init_income(self):
+        params = {}
+        income_df = self.dfs["mean_income"]
         income_df['Total annual income (£)'] = (
             income_df['Total annual income (£)']
             .str.strip()
@@ -222,177 +170,117 @@ def generate_household_samples(num_households: int) -> list[float]:
             .astype(float)
         )
         log_income = np.log(income_df['Total annual income (£)'])
-        shape, loc, scale = skewnorm.fit(log_income)
-        income_sample = np.exp(skewnorm.rvs(shape, loc=loc, scale=scale, size=1))[0]
+        params['shape'], params['loc'], params['scale'] = skewnorm.fit(log_income)
+        params['log_min'] = log_income.min()
+        params['log_max'] = log_income.max()
+        params['median'] = income_df['Total annual income (£)'].median()
+        self.income_params = params
+
+    def sample_income(self, nssec_sample):
+        income_sample = np.exp(skewnorm.rvs(self.income_params['shape'], loc=self.income_params['loc'], scale=self.income_params['scale'], size=1))[0]
         log_sample = np.log(income_sample)
-        log_min = log_income.min()
-        log_max = log_income.max()
-        total_income_norm += (log_sample - log_min) / (log_max - log_min)
+        income_norm = (log_sample - self.income_params['log_min']) / (self.income_params['log_max'] - self.income_params['log_min'])
 
-        NSSEC = {
-            "L1, L2 and L3: Higher managerial, administrative and professional occupations": 1.90,
-            "L4, L5 and L6: Lower managerial, administrative and professional occupations": 1.35,
-            "L7: Intermediate occupations": 1.00,
-            "L8 and L9: Small employers and own account workers": 1.10,
-            "L10 and L11: Lower supervisory and technical occupations": 0.90,
-            "L12: Semi-routine occupations": 0.75,
-            "L13: Routine occupations": 0.65,
-            "L14.1 and L14.2: Never worked and long-term unemployed": 0.40,
-            "L15: Full-time students": 0.35,
-            "Does not apply": 0.00
-        }
+        income_sample *= NSSEC_MULTIPLIERS[nssec_sample]
+        low_income_sample = int(income_sample < 0.6 * self.income_params['median'])
 
-        income_sample *= NSSEC[nssec_sample] # scale for the low income sample
-        median_income = income_df['Total annual income (£)'].median()
-        low_income_sample = int(income_sample < 0.6 * median_income)
+        return income_norm, low_income_sample
 
-        total_low += low_income_sample  ### temp
-
-        # Household composition
-        num_adults_sample = sample_from_csv(FILE_PATHS["household_employed"],
-                                            'Number of adults in employment in household (5 categories)',
-                                            filters={'Household size (5 categories)': house_size_sample},
-                                            ignore_categories=['Does not apply'])
-
-        num_disable_sample = sample_from_csv(FILE_PATHS["household_disabled"],
-                                             'Number of disabled people in household (4 categories)',
-                                             filters={'Household size (5 categories)': house_size_sample},
-                                             ignore_categories=['Does not apply'])
-        if '1' in num_disable_sample:
-            observed['disable_a'] += 1 # 1 disabed
-        elif '2' in num_disable_sample:
-            observed['disable_a'] += 2 # 2 disabled
-        elif 'No people' in num_disable_sample:
-            observed['disable_b'] += 1 # No disabled
-
-        num_long_sample = sample_from_csv(FILE_PATHS["household_longterm"],
-                                          'Number of people in household with a long-term heath condition but are not disabled (4 categories)',
-                                          filters={'Household size (5 categories)': house_size_sample},
-                                          ignore_categories=['Does not apply'])
-
-        dep_edu_sample = sample_from_csv(FILE_PATHS["deprived_education"],
-                                         'Household deprived in the education dimension (3 categories)',
-                                         filters={'Highest level of qualification (7 categories)': qual_sample},
-                                         ignore_categories=['Does not apply'])
-
-        dep_employ_sample = sample_from_csv(FILE_PATHS["deprived_employment"],
-                                            'Household deprived in the employment dimension (3 categories)',
-                                            filters={'Number of adults in employment in household (5 categories)': num_adults_sample,
-                                                     'National Statistics Socio-economic Classification (NS-SeC) (10 categories)': nssec_sample})
-
-        dep_health_sample = sample_from_csv(FILE_PATHS["deprived_health"],
-                                            'Household deprived in the health and disability dimension (3 categories)',
-                                            filters={'Number of people in household with a long-term heath condition but are not disabled (4 categories)': num_long_sample,
-                                                     'Number of disabled people in household (4 categories)': num_disable_sample})
-        if 'is not deprived' in dep_health_sample:
-            observed['health_a'] += 1 # Good health
-        elif 'is deprived' in dep_health_sample:
-            observed['health_b'] += 1 # Bad health
-
-        # Housing and occupancy
-        num_people_sample = sample_from_csv(FILE_PATHS["people_per_room"],
-                                           'Number of people per room in household (5 categories)',
-                                           filters={'Household size (5 categories)': house_size_sample},
-                                           ignore_categories=['Does not apply'])
-
-        num_occupancy_sample = sample_from_csv(FILE_PATHS["occupancy"],
-                                              'Occupancy rating for rooms (5 categories)',
-                                              filters={'Number of people per room in household (5 categories)': num_people_sample},
-                                              ignore_categories=['Does not apply'])
-
-        dep_housing_sample = sample_from_csv(FILE_PATHS["deprived_housing"],
-                                            'Household deprived in the housing dimension (3 categories)',
-                                            filters={'Number of people per room in household (5 categories)': num_people_sample,
-                                                     'Occupancy rating for rooms (5 categories)': num_occupancy_sample},
-                                            ignore_categories=['Does not apply'])
-
-        # Household deprivation
+    def sample_household_dep(self, dep_edu_sample, dep_employ_sample, dep_health_sample, dep_housing_sample):
         household_dep_sample = sum([
             dep_edu_sample == 'Household is deprived in the education dimension',
             dep_employ_sample == 'Household is deprived in the employment dimension',
             dep_health_sample == 'Household is deprived in the health and disability dimension',
             dep_housing_sample == 'Household is deprived in the housing dimension'
         ])
+        return household_dep_sample
 
-        total_deprived += household_dep_sample  ### temp
-
-        # Tenure & insurance
-        tenure_sample = sample_from_csv(FILE_PATHS["tenure"],
-                                       'Tenure of household (7 categories)',
-                                       ignore_categories=['Does not apply'])
-
+    def sample_internet(self, age_sample, house_size_sample):
         internet_prob = 0.85 if age_sample == 'Aged 65 years and over' and house_size_sample == '1 person in household' else 0.98
-        internet_sample = np.random.binomial(1, internet_prob)
+        return np.random.binomial(1, internet_prob)
 
-        a, b = 30, 10  # mean ~ 0.75
-        home_insure_rate = np.random.beta(a, b)
-        total_home_insure += home_insure_rate
+    def sample_insurances(self):
+        home_insure_rate = np.random.beta(30, 10)  # mean ~ 0.75
         home_insure_sample = np.random.binomial(1, home_insure_rate)
         health_insure_sample = np.random.binomial(1, 0.14)
+        return home_insure_rate, home_insure_sample, health_insure_sample
 
-        '''print('========')
-        print('Age: ',age_sample)
-        print('Highest qual: ',qual_sample)
-        print('Accomodation: ',acco_type_sample)
-        print('Household size: ',house_size_sample)
-        print('Economic activity status: ',eas_sample)
-        print('Ns-sec: ',nssec_sample)
-        print('Income: ',income_sample)
-        print('Low income flag: ',low_income_sample)
+    def sample_household_features(self, num_households):
+        total_risk = 0
+        total_home_insure = 0
+        total_income_norm = 0
+        total_deprived = 0
+        total_low = 0
+        observed = {
+            "disable_a": 0, "disable_b": 0,
+            "elderly_a": 0, "elderly_b": 0,
+            "child_a": 0, "child_b": 0,
+            "health_a": 0, "health_b": 0,
+        }
 
-        print('Adults employed: ',num_adults_sample)
-        print('Disabled: ',num_disable_sample)
-        print('Long-term health: ',num_long_sample)
-        print('Deprived education: ',dep_edu_sample)
-        print('Deprived employment: ',dep_employ_sample)
-        print('Deprived health: ',dep_health_sample)
-        print('Deprived housing: ',dep_housing_sample)
-        print('Overall deprived: ',household_dep_sample)
+        for _ in range(num_households):
+            age_sample = self.sample_categorical_census("age")
+            observed['elderly_a' if age_sample == 'Aged 65 years and over' else 'elderly_b'] += 1
+            observed['child_a' if age_sample == 'Aged 15 years and under' else 'child_b'] += 1
 
-        print('People per room: ',num_people_sample)
-        print('Occupancy rating: ',num_occupancy_sample)
+            qual_sample = self.sample_categorical_census("qualification", [age_sample])
+ 
+            acco_type_sample = self.sample_categorical_census("accommodation")
 
-        print('Tenure: ',tenure_sample)
-        print('Internet flag: ',internet_sample)
-        print('Home insurance: ',home_insure_sample)
-        print('Health insurance: ',health_insure_sample)'''
-        
-        # Household risk score
-        household_risk = calculate_household_risk(
-            tenure_sample, acco_type_sample, house_size_sample, internet_sample,
-            household_dep_sample, low_income_sample, home_insure_sample, health_insure_sample
-        )
-        #risk_scores.append(household_risk)
-        total_risk += household_risk
+            house_size_sample = self.sample_categorical_census("household_size")
 
-        '''print(household_risk)
-        print('========')'''
-    features["household"] = household_risk = total_risk / num_households
-    features['home_insure_rate'] = total_home_insure / num_households
-    features['income_norm'] = total_income_norm / num_households
+            eas_sample = self.sample_categorical_census("economic_activity", [age_sample])
 
-    ### temp
-    features['deprived'] = total_deprived / num_households
-    features['low_income'] = total_low / num_households
-    ###
+            nssec_sample = self.sample_categorical_census("nssec", [age_sample, eas_sample])
 
-    return features, observed
+            income_norm, low_income_sample = self.sample_income(nssec_sample)
+            total_income_norm += income_norm
+            total_low += low_income_sample
 
-'''#np.random.seed(42)
-for x in range(3):
-    risk_scores, observed = generate_household_samples(1000)
-    print(risk_scores)
+            num_adults_sample = self.sample_categorical_census("household_employed", [house_size_sample])
 
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.hist(risk_scores, bins=20)
-    plt.xlabel("Value")
-    plt.ylabel("Frequency")
-    plt.title("Histogram of Values")
+            num_disable_sample = self.sample_categorical_census("household_disabled", [house_size_sample])
+            if '1' in num_disable_sample:
+                observed['disable_a'] += 1
+            elif '2' in num_disable_sample:
+                observed['disable_a'] += 2
+            elif 'No people' in num_disable_sample:
+                observed['disable_b'] += 1
 
-    # Save to file
-    plt.savefig(f"temp_{x}.png", dpi=300, bbox_inches="tight")
-    plt.close()'''
+            num_long_sample = self.sample_categorical_census("household_longterm", [house_size_sample])
 
-'''risk_score, observed = generate_household_samples(1000)
-print(risk_score, observed)'''
+            dep_edu_sample = self.sample_categorical_census("deprived_education", [qual_sample])
+
+            dep_employ_sample = self.sample_categorical_census("deprived_employment", [num_adults_sample, nssec_sample])
+
+            dep_health_sample = self.sample_categorical_census("deprived_health", [num_long_sample, num_disable_sample])
+            if 'is not deprived' in dep_health_sample:
+                observed['health_a'] += 1
+            elif 'is deprived' in dep_health_sample:
+                observed['health_b'] += 1
+
+            num_people_sample = self.sample_categorical_census("people_per_room", [house_size_sample])
+
+            num_occupancy_sample = self.sample_categorical_census("occupancy", [num_people_sample])
+
+            dep_housing_sample = self.sample_categorical_census("deprived_housing", [num_people_sample, num_occupancy_sample])
+
+            household_dep_sample = self.sample_household_dep(dep_edu_sample, dep_employ_sample, dep_health_sample, dep_housing_sample)
+            total_deprived += household_dep_sample
+
+            tenure_sample = self.sample_categorical_census("tenure")
+
+            internet_sample = self.sample_internet(age_sample, house_size_sample)
+
+            home_insure_rate, home_insure_sample, health_insure_sample = self.sample_insurances()
+            total_home_insure += home_insure_rate
+
+            total_risk += self.calculate_household_risk(tenure_sample, acco_type_sample, house_size_sample, internet_sample, household_dep_sample, low_income_sample, home_insure_sample, health_insure_sample)
+
+        features = {}
+        features["household"] = total_risk / num_households
+        features['home_insure_rate'] = total_home_insure / num_households
+        features['income_norm'] = total_income_norm / num_households
+        features['deprived'] = total_deprived / num_households
+        features['low_income'] = total_low / num_households
+        return features, observed

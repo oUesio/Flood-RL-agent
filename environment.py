@@ -10,6 +10,7 @@ class Environment():
         self.impact = None
         self.samples = Sampler()
 
+    # Update features
     def update_prec(self):
         prec_dist = self.samples.features.dist_params['precipitation']
         zero_sample = np.random.binomial(n=1, p=prec_dist['pct_zero'], size=1)[0]
@@ -94,7 +95,6 @@ class Environment():
             Runoff increases as soil wets up.
             Already captured by your soil moisture state.
         '''
-
 
     def update_emergency(self):
         # response time, bed occupancy, handover time
@@ -185,7 +185,6 @@ class Environment():
             sum(weights[k] * features[k] for k in weights) / total_weight
         )
 
-
     def preparedness(self): # high preparedness = lower risk
         weights = {
             "response_time_norm": 0.20,
@@ -244,7 +243,6 @@ class Environment():
             (sum(weights[k] * features[k] for k in weights) / total_weight) * historic_factor * holiday_factor
         ), 0, 1)
 
-
     def impact_score(self):
         physical_impact = ( # no exposure or no damage = no physical impact
             self.derived["exposure"] # more exposure = high risk
@@ -281,40 +279,3 @@ class Environment():
         self.update_emergency()
 
         self.update_deprived()
-        
-'''np.random.seed(42)
-start = time.time()
-temp = Environment()
-temp.init_variable_samples()
-print('Runtime full: ', time.time() - start)
-print(temp.features)
-print(temp.household)
-print(temp.derived)
-print(temp.impact)
-# self.derived["exposure"], self.derived["physical"], self.derived["socioeconomic"], self.samples.features["depth"], self.samples.features["damage_fraction"], 1 - self.derived["preparedness"], "recovery": 1 - self.derived["recovery"], self.impact'''
-
-'''import numpy as np
-import matplotlib.pyplot as plt'''
-
-#np.random.seed(42)
-
-'''N = 4  # number of simulations
-
-results = {
-    "exposure": [],
-    "physical": [],
-    "socioeconomic": [],
-    "depth": [],
-    "damage_fraction": [],
-    "preparedness_inv": [],
-    "recovery_inv": [],
-    "impact": [],
-}
-
-for i in range(N):
-    print(i)
-    temp = Environment()
-    print(temp.samples.features)
-    print(temp.derived)
-    print(temp.impact)
-    #temp.update_hydro()'''

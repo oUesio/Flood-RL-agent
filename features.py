@@ -5,7 +5,7 @@ import os
 import random
 from datetime import datetime
 from util import *
-from household import generate_household_samples
+from household import Household
 from scipy.optimize import curve_fit
 import geopandas as gpd
 import rasterio
@@ -31,6 +31,7 @@ class Sampler:
 
         self.features = {}
         self.dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
+        self.household = Household()
 
         self.init_ambulance_handover()
         self.init_soil_moisture()
@@ -440,8 +441,8 @@ class Sampler:
     def sample_season(self):
         self.features["season"] = random.choice(list(SEASON_MONTHS))
     
-    def sample_household(self, n=100):
-        household_features, observed = generate_household_samples(n)
+    def sample_household(self, n=100): 
+        household_features, observed = self.household.sample_household_features(n)
         self.features |= household_features
         return observed
     
