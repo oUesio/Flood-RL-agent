@@ -58,7 +58,7 @@ class Environment():
             "english_proficiency": 1 - self.samples.features["english_proficiency"], # high = low risk (proficient at english) (invert)
             "household": self.samples.features["household"], # high = high risk
             "property_value_norm": 1 - self.samples.features["property_value_norm"], # low = high risk (CDF) (invert)
-            "deprived": 1 - self.samples.features["deprived"], # low deprivation rank = high risk
+            "deprived": 1 - self.samples.features["deprived"], # low deprivation index rank = high risk
             "education": 1 - self.samples.features["education"], # far from education = slight possibility less educated or more deprived = high risk
         }
 
@@ -147,10 +147,33 @@ class Environment():
     def sample_features(self):
         self.samples.sample_features()
     
-    def update_deprived(self):
+    def update_derived(self):
         self.physical_vul()
         self.socioeconomic_vul()
         self.preparedness()
         self.recovery()
         self.exposure()
         self.impact_score()
+
+    def get_observable_features(self):
+        return {
+            # Measurements
+            "precipitation": self.samples.features['precipitation'], # millimetres
+            "flood_depth": self.samples.features['depth'], # metres
+            "season": self.samples.features['season'], # Spring, Summer, Autumn, Winter
+            "soil_moisture": self.samples.features["soil_moisture"], # fraction
+            # From data
+            "water_density": self.samples.features["water_dens"], # fraction
+            "water_distance": self.samples.features["water_dist"],
+            "elevation": self.samples.features["elevation"], # metres
+            "impervious_surface": self.samples.features["impervious"], # fraction
+            "historical_flood_flag": self.samples.features["historic"], # boolean
+            "deprivation_index": self.samples.features["deprived"], # normalised (max=10, min=1)
+            "residential": self.samples.features["resident"], # fraction
+            "commercial": self.samples.features["commercial"], # fraction
+            "industrial": self.samples.features["indust"], # fraction
+            "agriculture": self.samples.features["agri"], # fraction
+            "transport": self.samples.features["transport"], # fraction
+            # infrastructure excluded since it only represents electricity transmission lines
+            "population_density": self.samples.features["popden"], # of a 1km x 1km grid cell
+        }

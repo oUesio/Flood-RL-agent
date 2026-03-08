@@ -47,7 +47,7 @@ class Sampler:
         grid = gpd.read_file(GRID_FILE)
         self.dfs['grid'] = grid
         for f in GRID_FEATURES:
-            if f in ["hospital", "emergency", "infra", "transport"]: # norm
+            if f in ["hospital", "emergency", "infra", "transport", "deprived"]: # norm
                 self.grid_params[f+'_min'] = self.dfs['grid'][f].min()
                 self.grid_params[f+'_max'] = self.dfs['grid'][f].max()   
             if f not in ["hospital", "emergency", "infra", "historic"]: # exclude historic, the rest are for ratio
@@ -59,37 +59,41 @@ class Sampler:
         row = self.dfs['grid'].sample(1).iloc[0]
         for f in GRID_FEATURES:
             val = row[f]
+            scaled_noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
+            noise = np.random.normal(0, 0.02)
 
-            if f in ["historic", "popden"]: # no noise
+            if f in ["historic"]: # no noise
                 self.features[f] = val
 
             if f in ["impervious", "water_dens", "road_dist", "transport", "buildings", "popden"]: # ratio
-                noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
-                s = max(val + noise, 0)
+                noisy_val = max(val + scaled_noise, 0)
                 if f == "water_dens":
-                    self.features[f+'_ratio'] = np.log1p(s) / (self.grid_params[f+'_log_mean'] + 1e-6)
+                    self.features[f+'_ratio'] = np.log1p(noisy_val) / (self.grid_params[f+'_log_mean'] + 1e-6)
                 else:
-                    self.features[f+'_ratio'] = s / self.grid_params[f]
+                    self.features[f+'_ratio'] = noisy_val / self.grid_params[f]
 
             if f in ["water_dist", "elevation"]: # inverse ratio
-                noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
-                s = max(val + noise, 0)
+                noisy_val = max(val + scaled_noise, 0)
                 if f == "water_dist":
-                    self.features[f+'_ratio'] = (self.grid_params[f+'_log_mean'] + 1e-6) / np.log1p(s)
+                    self.features[f+'_ratio'] = (self.grid_params[f+'_log_mean'] + 1e-6) / np.log1p(noisy_val)
                 else:
-                    self.features[f+'_ratio'] = self.grid_params[f] / s
+                    self.features[f+'_ratio'] = self.grid_params[f] / noisy_val
             
-            if f in ["hospital", "emergency", "infra", "transport"]: # normalise
+            if f in ["hospital", "emergency", "infra", "transport", "deprived"]: # normalise
                 val = max(0, min((val - self.grid_params[f+'_min']) / (self.grid_params[f+'_max'] - self.grid_params[f+'_min']), 1))
                 if f == "infra":
                     val = val * 0.3 # scaled since electrical lines cover less area (line polygons)
                 elif f == "transport":
                     val = val * 0.4 # scaled since roads and rail tracks cover less area (line polygons)
 
-            if f in ["deprived", "transport", "hospital", "emergency", "education", "resident", "commercial", "indust", "agri", "infra"]: # norm
-                noise = np.random.normal(0, 0.02)
+            if f in ["impervious", "deprived", "transport", "hospital", "emergency", "education", "resident", "commercial", "indust", "agri", "infra"]: # noise, fraction
                 noisy_val = max(0, min(val+noise, 1))
                 self.features[f] = noisy_val 
+
+            if f in ["elevation", "water_dens", "water_dist", "popden"]: # scaled noise, non-fraction
+                noisy_val = max(val + scaled_noise, 0)
+                self.features[f] = noisy_val 
+
 
         # Population density factor for response time
         self.response_params['popden_factor'] = np.clip(0.8 + 0.4 * (self.features['popden_ratio'] / 2), 0.8, 1.2)
@@ -407,7 +411,8 @@ class Sampler:
         mu, sigma = norm.fit(values)
         sigma = max(sigma, 1e-6)
         soil_sample = norm.rvs(mu, sigma)
-
+        
+        self.features['soil_moisture'] = soil_sample
         self.features['soil_moisture_ratio'] = soil_sample / self.soil_params['global_mean']
 
     def init_english_proficiency(self):
@@ -456,7 +461,7 @@ class Sampler:
         row = self.sample_cell()
 
         # Depends on cell
-        observed = self.sample_household(int(self.features["popden"])) 
+        observed = self.sample_household() 
         self.sample_soil_moisture()
         self.sample_flood_depth(row)
 

@@ -281,6 +281,5 @@ class Household:
         features["household"] = total_risk / num_households
         features['home_insure_rate'] = total_home_insure / num_households
         features['income_norm'] = total_income_norm / num_households
-        features['deprived'] = total_deprived / num_households
         features['low_income'] = total_low / num_households
         return features, observed

@@ -61,13 +61,12 @@ GRID_FEATURES = [
     "elevation", # lower elevation = more risk (water flows downhill)
     "impervious", # more impervious = more risk (less infiltration, more runoff)
     "historic", # flag
-    #"road_dens", # more roads = more risk (better access, but more roads means more impervious)
     "road_dist", # longer distance = more risk (harder access to evac)
     "hospital", # longer distance = more risk (slower emergency response)
     "deprived", # lower deprivation rank = more risk
     "transport", # more transport = more risk (better access, but more means more impervious)
     "emergency", # longer distance = more risk (slower emergency response)
-    "education", # ???
+    "education", # longer distance = more deprived = more risk
     "resident", # more residential = more people = more risk
     "commercial", # more people = more risk
     "indust", # more = more risk
