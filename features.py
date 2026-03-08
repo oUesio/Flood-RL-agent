@@ -15,17 +15,15 @@ import datetime as dt
 class Sampler:
     def __init__(self):
         # Resampling
-        self.popden_params = {} # flag{mu, sigma, mean}
         self.property_params = {} # shape, loc, scale
         self.handover_params = {} # seasons{probs}
         self.response_params = {} # road_factor, prec_factor, popden_factor, seasons{data_min, data_max, shape, loc, scale}
         self.prec_params = {} # season{pct_zero, non_zero_max, shape, loc, scale}
-        self.river_params = {} # river{shape, loc, scale}, river_list, river
         self.soil_params = {} # transform, stack, seasons{transform, stack}
         self.bed_params = {} # season{alpha, beta}
         self.urban_prob = None
         self.age = None
-        self.depth_damage_k = None
+        self.depth_damage_k = {}
         self.building_age_params = {} # probs, curr year, mean
         self.grid_params = {} # 
 
@@ -41,49 +39,62 @@ class Sampler:
         self.init_age()
         self.init_hospital_bed()
         self.init_precipitation()
-        self.init_river()
-        self.init_urban()
         self.init_english_proficiency()
         self.init_building_age()
-        self.init_depth_damage()
-        self.init_population_density()
+        self.init_damage_cost()
 
     def init_cell(self):
         grid = gpd.read_file(GRID_FILE)
         self.dfs['grid'] = grid
         for f in GRID_FEATURES:
-            if f == "hospital":
-                self.grid_params['hospital_min'] = self.dfs['grid'][f].min()
-                self.grid_params['hospital_max'] = self.dfs['grid'][f].max()   
-            elif f != "historic": # exclude historic and hospital
+            if f in ["hospital", "emergency", "infra", "transport"]: # norm
+                self.grid_params[f+'_min'] = self.dfs['grid'][f].min()
+                self.grid_params[f+'_max'] = self.dfs['grid'][f].max()   
+            if f not in ["hospital", "emergency", "infra", "historic"]: # exclude historic, the rest are for ratio
                 self.grid_params[f] = self.dfs['grid'][f].mean()
+            if f in ["water_dens", "water_dist"]:
+                self.grid_params[f+'_log_mean'] = np.log1p(self.dfs['grid'][f]).mean()
 
     def sample_cell(self, noise_scale=0.05):
         row = self.dfs['grid'].sample(1).iloc[0]
         for f in GRID_FEATURES:
             val = row[f]
-            if f == "historic":
-                self.features["historic"] = val
-            else:
+
+            if f in ["historic", "popden"]: # no noise
+                self.features[f] = val
+
+            if f in ["impervious", "water_dens", "road_dist", "transport", "buildings", "popden"]: # ratio
                 noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
-                s = max(val + noise, 0) # ensure positive
-
-                #### 
-                self.features[f] = s
-                ####
-
-                if f in ["impervious", "water_dens", "road_dist", "road_dens"]:
-                    if f == "impervious":
-                        s = max(0, min(s, 1))
-                        self.features["impervious"] = s # fraction
+                s = max(val + noise, 0)
+                if f == "water_dens":
+                    self.features[f+'_ratio'] = np.log1p(s) / (self.grid_params[f+'_log_mean'] + 1e-6)
+                else:
                     self.features[f+'_ratio'] = s / self.grid_params[f]
-                elif f == 'hospital':
-                    s = min(s, self.grid_params['hospital_max']) # ensure does not exceed max
-                    self.features[f+'_norm'] = max(0, min((s - self.grid_params['hospital_min']) / (self.grid_params['hospital_max'] - self.grid_params['hospital_min']), 1)) # 0-1 range
+
+            if f in ["water_dist", "elevation"]: # inverse ratio
+                noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
+                s = max(val + noise, 0)
+                if f == "water_dist":
+                    self.features[f+'_ratio'] = (self.grid_params[f+'_log_mean'] + 1e-6) / np.log1p(s)
                 else:
                     self.features[f+'_ratio'] = self.grid_params[f] / s
+            
+            if f in ["hospital", "emergency", "infra", "transport"]: # normalise
+                val = max(0, min((val - self.grid_params[f+'_min']) / (self.grid_params[f+'_max'] - self.grid_params[f+'_min']), 1))
+                if f == "infra":
+                    val = val * 0.3 # scaled since electrical lines cover less area (line polygons)
+                elif f == "transport":
+                    val = val * 0.4 # scaled since roads and rail tracks cover less area (line polygons)
 
-        # Road factor for respone time
+            if f in ["deprived", "transport", "hospital", "emergency", "education", "resident", "commercial", "indust", "agri", "infra"]: # norm
+                noise = np.random.normal(0, 0.02)
+                noisy_val = max(0, min(val+noise, 1))
+                self.features[f] = noisy_val 
+
+        # Population density factor for response time
+        self.response_params['popden_factor'] = np.clip(0.8 + 0.4 * (self.features['popden_ratio'] / 2), 0.8, 1.2)
+
+        # Road factor for response time
         road = self.features['road_dist_ratio']
         road_factor = 0.95 + 0.15 * (np.log1p(road) - np.log1p(self.grid_params['road_dist']))
         self.response_params['road_factor'] = np.clip(road_factor, 0.75, 1.1)
@@ -108,41 +119,6 @@ class Sampler:
             depth = np.random.uniform(low, high)
         self.features["depth"] = depth
 
-    def init_population_density(self):  
-        popden = self.dfs["population_density"]
-        merged = popden.merge(self.dfs["urban"], on="OA21CD", how="left")
-
-        for flag in ['urban', 'rural']:
-            params = {}
-
-            popden_total = merged.loc[
-                merged["Urban_rural_flag"].str.lower() == flag, "Total"
-            ]
-
-            log_popden = np.log(popden_total)
-            mu, sigma = log_popden.mean(), log_popden.std()
-            popden_mean = popden_total.mean()
-
-            params['mu'] = mu
-            params['sigma'] = sigma
-            params['mean'] = popden_mean
-
-            self.popden_params[flag] = params
-
-    def sample_population_density(self):
-        params = self.popden_params['urban' if self.features['urban'] else 'rural']
-
-        sample = np.random.lognormal(params['mu'], params['sigma'])
-        self.features["population_density_ratio"] = sample / params['mean']
-
-        # Population density scale factor for response time
-        log_pop = np.log1p(sample)
-        log_min = np.log1p(4) # min population density from data
-        log_max = np.log1p(2561) # max population density from data
-
-        scaled = (log_pop - log_min) / (log_max - log_min) # 0–1
-        self.response_params['popden_factor'] = 0.95 + 0.15 * (1 - scaled) # 0.95–1.1 range
-
     def init_mean_property(self):
         property_df = self.dfs["property_value"]
         property_df = property_df.dropna(subset=["price", "property_type", "duration"])
@@ -154,7 +130,7 @@ class Sampler:
     def sample_mean_property(self):
         sample_value = np.exp(skewnorm.rvs(self.property_params['shape'], loc=self.property_params['loc'], scale=self.property_params['scale'], size=1)[0])
 
-        #### 
+        #### For histograms only
         self.features["property_value"] = sample_value
         ####
 
@@ -213,12 +189,12 @@ class Sampler:
 
         response_sample = lognorm.rvs(params['shape'], loc=params['loc'], scale=params['scale'])
 
-        #### 
+        #### For histograms only
         self.features["response_time"] = response_sample * self.response_params['popden_factor'] * self.response_params['prec_factor'] * self.response_params['road_factor']
         ####
 
         self.features["response_time_norm"] = (
-            (response_sample * self.response_params['popden_factor'] * self.response_params['prec_factor'] * self.response_params['road_factor'] -params['data_min']) / (params['data_max'] - params['data_min'])
+            (response_sample * self.response_params['popden_factor'] * self.response_params['prec_factor'] * self.response_params['road_factor'] - params['data_min']) / (params['data_max'] - params['data_min'])
         ).clip(0, 1) # longer delays = more risk
     
     def init_ambulance_handover(self):
@@ -311,17 +287,41 @@ class Sampler:
         # Children rate
         self.features['children'] = sample_beta_observed(self.age, "category", "total_children", "total_not_children",observed['child_a'], observed['child_b'], "Observation")
 
-    def init_depth_damage(self):
+    def init_damage_cost(self):
         depths = np.array([float(c) for c in self.dfs['depth_damage'].columns[1:]])
-        # Compute overall damage fraction (mean across all types)
-        overall_damage = self.dfs['depth_damage'].iloc[:, 1:].astype(float).mean(axis=0).values
-        # Fit the exponential model
-        params, _ = curve_fit(exp_damage, depths, overall_damage, bounds=(0, np.inf))
-        self.depth_damage_k = params[0]
+        land_use = ["transport", "residential", "commercial", "industrial", "agriculture", "infrastructure"]
+        for lu in land_use:
+            rows = self.dfs['depth_damage'][self.dfs['depth_damage']['type'] == lu]
 
-    def sample_depth_damage(self):
-        # Add noise and ensures stays within bounds
-        self.features['damage_fraction'] = np.clip(exp_damage(self.features['depth'], self.depth_damage_k) + np.random.normal(0, 0.05), 0, 1)
+            damage = rows.iloc[:, 1:].astype(float).mean(axis=0).values
+            
+            # Fit exponential model
+            params, _ = curve_fit(exp_damage, depths, damage, bounds=(0, np.inf))
+            self.depth_damage_k[lu] = params[0]
+        
+    def sample_damage_cost(self):
+        transport = self.features["transport"]
+        resident = self.features["resident"]
+        commercial = self.features["commercial"]
+        industrial = self.features["indust"]
+        agriculture = self.features["agri"]
+        infrastructure = self.features["infra"]
+
+        # Weighted sum of damage fractions by land use proportion
+        weight_sum_damage = (
+            transport * exp_damage(self.features['depth'], self.depth_damage_k["transport"])  +
+            resident * exp_damage(self.features['depth'], self.depth_damage_k["residential"]) +
+            commercial * exp_damage(self.features['depth'], self.depth_damage_k["commercial"]) +
+            industrial * exp_damage(self.features['depth'], self.depth_damage_k["industrial"]) +
+            agriculture * exp_damage(self.features['depth'], self.depth_damage_k["agriculture"]) +
+            infrastructure * exp_damage(self.features['depth'], self.depth_damage_k["infrastructure"])
+        )
+
+        total_weight = transport + resident + commercial + industrial + agriculture + infrastructure
+        if total_weight > 1: # Norm if damage fraction exceeding 1 (assumes grid cell not always covered by landuse types)
+            weight_sum_damage /= total_weight
+
+        self.features['cost_fraction'] = np.clip(weight_sum_damage + np.random.normal(0, 0.02), 0, 1)
 
     def init_precipitation(self):
         # 24-Hour Precipitation
@@ -352,28 +352,13 @@ class Sampler:
         scaled = log_prec / log_max # 0–1
         self.response_params['prec_factor'] = 0.95 + 0.25 * scaled # 0.95–1.2 range
 
-    def init_river(self):
-        # River level
-        # m
-        self.river_params['river_list'] = glob.glob(os.path.join(FILE_PATHS_DIR['river_level_dir'], "*.csv"))
-        for river in self.river_params['river_list']:
-            params = {}
-            df = pd.read_csv(river)
-            values = pd.to_numeric(df["value"], errors="coerce").dropna()
-            params['shape'], params['loc'], params['scale'] = gamma.fit(values, floc=0)
-            self.river_params[river] = params
-
-    def sample_river(self):
-        river = random.choice(self.river_params['river_list'])
-        params = self.river_params[river]
-        self.river_params['river'] = river # use for future updating logic? otherwise delete
-
-        self.features['river_level'] = gamma.rvs(a=params['shape'], loc=params['loc'], scale=params['scale'], size=1)[0]
+        self.features['precipitation_norm'] = np.clip(log_prec / log_max, 0, 1)
 
     def init_soil_moisture(self):
         # Load soil moisture rasters
         tiff_files = sorted(glob.glob(os.path.join(FILE_PATHS_DIR['soil_moisture_dir'], "*.tif")))
 
+        all_values = []
         for season in list(SEASON_MONTHS):
             season_tiffs = []
             for f in tiff_files:
@@ -397,7 +382,10 @@ class Sampler:
                         stack.append(data)
 
             params['stack'] = np.stack(stack, axis=0)  # shape: (time, rows, cols)
+            all_values.append(np.nanmean(params['stack']))
             self.soil_params[season] = params
+
+        self.soil_params['global_mean'] = np.mean(all_values)
 
     def sample_soil_moisture(self):
         params = self.soil_params[self.features["season"]]
@@ -418,13 +406,9 @@ class Sampler:
 
         mu, sigma = norm.fit(values)
         sigma = max(sigma, 1e-6)
-        self.features['soil_moisture'] = norm.rvs(mu, sigma)
+        soil_sample = norm.rvs(mu, sigma)
 
-    def init_urban(self):
-        self.urban_prob = self.dfs["urban"]["Urban_rural_flag"].value_counts(normalize=True)
-
-    def sample_urban(self):
-        self.features["urban"] = np.random.binomial(1, self.urban_prob["Urban"])
+        self.features['soil_moisture_ratio'] = soil_sample / self.soil_params['global_mean']
 
     def init_english_proficiency(self):
         self.dfs["english_proficiency"]['Proficiency_Group'] = self.dfs["english_proficiency"]['Proficiency in English language (4 categories)'].apply(map_proficiency)
@@ -459,10 +443,6 @@ class Sampler:
 
         self.sample_precipitation()
 
-        self.sample_river()
-
-        self.sample_urban()
-
         self.sample_mean_property()
 
         self.sample_ambulance_handover()
@@ -475,12 +455,8 @@ class Sampler:
 
         row = self.sample_cell()
 
-        observed = self.sample_household()
-
-        # Depends on urban
-        self.sample_population_density()
-
         # Depends on cell
+        observed = self.sample_household(int(self.features["popden"])) 
         self.sample_soil_moisture()
         self.sample_flood_depth(row)
 
@@ -492,5 +468,5 @@ class Sampler:
         self.sample_emergency_response()
 
         # Depends on flood depth # ADD DEPENDENCY FOR OTHERS
-        self.sample_depth_damage()
+        self.sample_damage_cost()
 
