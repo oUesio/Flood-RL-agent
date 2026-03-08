@@ -1,9 +1,4 @@
-import pandas as pd
 import numpy as np
-import geopandas as gpd
-from scipy.stats import lognorm, skewnorm, truncnorm
-import random
-from datetime import datetime
 
 FILE_PATHS = {
     "urban": "data/urban_rural.csv",
@@ -66,10 +61,23 @@ GRID_FEATURES = [
     "elevation", # lower elevation = more risk (water flows downhill)
     "impervious", # more impervious = more risk (less infiltration, more runoff)
     "historic", # flag
-    "road_dens", # more roads = more risk (better access, but more roads means more impervious)
+    #"road_dens", # more roads = more risk (better access, but more roads means more impervious)
     "road_dist", # longer distance = more risk (harder access to evac)
     "hospital", # longer distance = more risk (slower emergency response)
+    "deprived", # lower deprivation rank = more risk
+    "transport", # more transport = more risk (better access, but more means more impervious)
+    "emergency", # longer distance = more risk (slower emergency response)
+    "education", # ???
+    "resident", # more residential = more people = more risk
+    "commercial", # more people = more risk
+    "indust", # more = more risk
+    "agri", # more = more risk
+    "infra", # more = more risk
+    "popden", # more = more risk
+    "buildings" # more = more risk
 ]
+
+LAND_USE = ["transport", "residential", "commerical", "industrial", "agriculture", "infrastructure"]
 
 def hhmmss_to_hours(time_str: str) -> float:
     h, m, s = map(int, time_str.split(":"))
