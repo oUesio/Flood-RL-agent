@@ -55,6 +55,11 @@ class Sampler:
             if f in ["water_dens", "water_dist"]:
                 self.grid_params[f+'_log_mean'] = np.log1p(self.dfs['grid'][f]).mean()
 
+            # For recording min and max
+            #if f in ["water_dist", "elevation", "popden"]:
+            #    print(f)
+            #    print(f"{f} min: {self.dfs['grid'][f].min()}, max: {self.dfs['grid'][f].max()}, ")
+
     def sample_cell(self, noise_scale=0.05):
         row = self.dfs['grid'].sample(1).iloc[0]
         for f in GRID_FEATURES:
@@ -106,7 +111,7 @@ class Sampler:
         self.features["geometry"] = row.geometry
         return row
 
-    def sample_flood_depth(self, row):
+    def sample_flood_depth(self, row, max_depth=3):
         prob_cols = ["p_0", "p_0p0_0p2", "p_0p2_0p3", "p_0p3_0p6", "p_0p6_0p9", "p_0p9_1p2", "p_gt_1p2"]
         bins = [(0.0, 0.0), (0., 0.2), (0.2, 0.3), (0.3, 0.6), (0.6, 0.9), (0.9, 1.2), (1.2, np.inf)]
 
@@ -118,7 +123,7 @@ class Sampler:
         if low == 0.0 and high == 0.0:
             depth = 0.0
         elif np.isinf(high):
-            depth = min(low + np.random.exponential(scale=0.3), 3) # max 3m depth
+            depth = min(low + np.random.exponential(scale=0.3), max_depth) # max 3m depth
         else:
             depth = np.random.uniform(low, high)
         self.features["depth"] = depth
@@ -332,6 +337,13 @@ class Sampler:
         # mm
         prec = self.dfs["precipitation"]
         prec["time"] = pd.to_datetime(prec["time"])
+
+        # For recording min and max
+        #all_rainfall = prec["rainfall"]
+        #self.prec_params['min'] = float(all_rainfall.min())
+        #self.prec_params['max'] = float(all_rainfall.max())
+        #print(f"Precipitation min: {self.prec_params['min']}, max: {self.prec_params['max']}") 
+
         for season in list(SEASON_MONTHS):
             params = {}
             rainfall = prec.loc[

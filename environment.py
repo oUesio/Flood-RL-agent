@@ -155,16 +155,17 @@ class Environment():
         self.exposure()
         self.impact_score()
 
-    def get_observable_features(self):
+    def get_observable_features(self): 
         return {
             # Measurements
             "precipitation": self.samples.features['precipitation'], # millimetres
             "flood_depth": self.samples.features['depth'], # metres
             "season": self.samples.features['season'], # Spring, Summer, Autumn, Winter
+            "holiday": self.samples.features["holiday"], # Holidayflag
             "soil_moisture": self.samples.features["soil_moisture"], # fraction
             # From data
             "water_density": self.samples.features["water_dens"], # fraction
-            "water_distance": self.samples.features["water_dist"],
+            "water_distance": self.samples.features["water_dist"], # metres (crs 27700)
             "elevation": self.samples.features["elevation"], # metres
             "impervious_surface": self.samples.features["impervious"], # fraction
             "historical_flood_flag": self.samples.features["historic"], # boolean
