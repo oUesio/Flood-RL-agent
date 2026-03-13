@@ -13,7 +13,7 @@ import glob
 import datetime as dt
 
 class Sampler:
-    def __init__(self):
+    def __init__(self, use_historic):
         # Resampling
         self.property_params = {} # shape, loc, scale
         self.handover_params = {} # seasons{probs}
@@ -30,6 +30,15 @@ class Sampler:
         self.features = {}
         self.dfs = {key: pd.read_csv(path) for key, path in FILE_PATHS.items()}
         self.household = Household()
+
+        self.use_historic = use_historic
+        if self.use_historic == "yellow":
+            self.historic_data = pd.read_csv("warning/yellow_warnings.csv")
+        elif self.use_historic == "amber":
+            self.historic_data = pd.read_csv("warning/amber_warnings.csv")
+        elif self.use_historic == "red":
+            self.historic_data = pd.read_csv("warning/red_warnings.csv")
+        self.historic_row = None
 
         self.init_ambulance_handover()
         self.init_soil_moisture()
@@ -60,11 +69,11 @@ class Sampler:
             #    print(f)
             #    print(f"{f} min: {self.dfs['grid'][f].min()}, max: {self.dfs['grid'][f].max()}, ")
 
-    def sample_cell(self, noise_scale=0.05):
+    def sample_cell(self):
         row = self.dfs['grid'].sample(1).iloc[0]
         for f in GRID_FEATURES:
             val = row[f]
-            scaled_noise = np.random.normal(0, noise_scale * abs(val + 1e-6))
+            scaled_noise = np.random.normal(0, 0.05 * abs(val + 1e-6))
             noise = np.random.normal(0, 0.02)
 
             if f in ["historic"]: # no noise
@@ -158,10 +167,17 @@ class Sampler:
 
     def sample_building_age(self):
         bucket = np.random.choice(list(BUCKET_RANGES), p=self.building_age_params['probs'])
-
         start, end = BUCKET_RANGES[bucket]
         sampled_year = np.random.randint(start, end + 1)
-        sampled_age = self.building_age_params['curr_year'] - sampled_year
+
+        if self.use_historic is not None:
+            while self.historic_row['YEAR'].item() < sampled_year:
+                bucket = np.random.choice(list(BUCKET_RANGES), p=self.building_age_params['probs'])
+                start, end = BUCKET_RANGES[bucket]
+                sampled_year = np.random.randint(start, end + 1)
+            sampled_age = self.historic_row['YEAR'].item() - sampled_year
+        else:
+            sampled_age = self.building_age_params['curr_year'] - sampled_year
 
         self.features["building_age"] = sampled_age
 
@@ -190,21 +206,32 @@ class Sampler:
                 self.response_params[season+'_'+category] = params
 
     def sample_emergency_response(self):
-        category = np.random.choice( 
-            ["C2", "C3"],
-            p=self.response_params[self.features['season']],
-        )
-        params = self.response_params[self.features["season"]+'_'+category]
+        if self.use_historic is not None and pd.notna(self.historic_row["C2_count"].item()):
+            C2_count, C3_count, C2_mean, C3_mean = self.historic_row["C2_count"].item(), self.historic_row["C3_count"].item(), self.historic_row["C2_mean"].item(), self.historic_row["C3_mean"].item()
+            total = C2_count + C3_count
+            if random.random() < (C2_count / total):
+                category = 'C2'
+                response_sample = max(0, C2_mean * (1 + np.random.normal(0, 0.1)))  # scaled by noise
+            else:
+                category = 'C3'
+                response_sample = max(0, C3_mean * (1 + np.random.normal(0, 0.1)))
+            params = self.response_params[self.historic_row["SEASON"].item()+'_'+category]
+        else:
+            category = np.random.choice( 
+                ["C2", "C3"],
+                p=self.response_params[self.features['season']],
+            )
+            params = self.response_params[self.features["season"]+'_'+category]
 
-        response_sample = lognorm.rvs(params['shape'], loc=params['loc'], scale=params['scale'])
+            response_sample = lognorm.rvs(params['shape'], loc=params['loc'], scale=params['scale'])
+
+        scaled_sample = response_sample * self.response_params['popden_factor'] * self.response_params['prec_factor'] * self.response_params['road_factor']
 
         #### For histograms only
-        self.features["response_time"] = response_sample * self.response_params['popden_factor'] * self.response_params['prec_factor'] * self.response_params['road_factor']
+        self.features["response_time"] = scaled_sample
         ####
 
-        self.features["response_time_norm"] = (
-            (response_sample * self.response_params['popden_factor'] * self.response_params['prec_factor'] * self.response_params['road_factor'] - params['data_min']) / (params['data_max'] - params['data_min'])
-        ).clip(0, 1) # longer delays = more risk
+        self.features["response_time_norm"] = ((scaled_sample - params['data_min']) / (params['data_max'] - params['data_min'])).clip(0, 1) # longer delays = more risk
     
     def init_ambulance_handover(self):
         handover = self.dfs["ambulance_handover"]
@@ -358,9 +385,12 @@ class Sampler:
 
     def sample_precipitation(self):
         params = self.prec_params[self.features["season"]]
-        zero_sample = np.random.binomial(n=1, p=params['pct_zero'], size=1)[0]
-        self.features['precipitation'] = 0 if zero_sample == 1 else gamma.rvs(a=params['shape'], loc=params['loc'], scale=params['scale'], size=1)[0]
 
+        if self.use_historic is not None:
+            self.features['precipitation'] = max(0, self.historic_row['RAINFALL'].item() + np.random.normal(0, 0.02))
+        else: 
+            zero_sample = np.random.binomial(n=1, p=params['pct_zero'], size=1)[0]
+            self.features['precipitation'] = 0 if zero_sample == 1 else gamma.rvs(a=params['shape'], loc=params['loc'], scale=params['scale'], size=1)[0]
         # Precipitation scale factor for response time
         log_prec = np.log1p(self.features['precipitation'])
         log_max = np.log1p(params['non_zero_max'])
@@ -404,26 +434,38 @@ class Sampler:
         self.soil_params['global_mean'] = np.mean(all_values)
 
     def sample_soil_moisture(self):
-        params = self.soil_params[self.features["season"]]
-        cell_geom = self.features["geometry"]  # polygon of the sampled grid cell
+        if self.use_historic is not None and pd.notna(self.historic_row["SOIL_MOISTURE_PATH"].item()):
+            with rasterio.open(self.historic_row["SOIL_MOISTURE_PATH"].item()) as src:
+                data = src.read(1)
+                nodata = src.nodata
+                while True:
+                    row = np.random.randint(0, data.shape[0])
+                    col = np.random.randint(0, data.shape[1])
+                    value = data[row, col]
+                    if value != nodata:
+                        break
+            soil_sample = np.clip(data[row, col] + np.random.normal(0, 0.02), 0, 1)
+        else:
+            params = self.soil_params[self.features["season"]]
+            cell_geom = self.features["geometry"]  # polygon of the sampled grid cell
 
-        # Find the single pixel containing the centroid of the sampled grid cell
-        centroid_x, centroid_y = cell_geom.centroid.x, cell_geom.centroid.y
-        col, row = ~params['transform'] * (centroid_x, centroid_y)
-        row, col = int(row), int(col)
+            # Find the single pixel containing the centroid of the sampled grid cell
+            centroid_x, centroid_y = cell_geom.centroid.x, cell_geom.centroid.y
+            col, row = ~params['transform'] * (centroid_x, centroid_y)
+            row, col = int(row), int(col)
 
-        # Ensure row/col are within raster bounds
-        row = np.clip(row, 0, params['stack'].shape[1]-1)
-        col = np.clip(col, 0, params['stack'].shape[2]-1)
+            # Ensure row/col are within raster bounds
+            row = np.clip(row, 0, params['stack'].shape[1]-1)
+            col = np.clip(col, 0, params['stack'].shape[2]-1)
 
-        # Extract time series for that pixel
-        values = params['stack'][:, row, col]
-        values = values[~np.isnan(values)]
+            # Extract time series for that pixel
+            values = params['stack'][:, row, col]
+            values = values[~np.isnan(values)]
 
-        mu, sigma = norm.fit(values)
-        sigma = max(sigma, 1e-6)
-        soil_sample = norm.rvs(mu, sigma)
-        
+            mu, sigma = norm.fit(values)
+            sigma = max(sigma, 1e-6)
+            soil_sample = norm.rvs(mu, sigma)
+            
         self.features['soil_moisture'] = soil_sample
         self.features['soil_moisture_ratio'] = soil_sample / self.soil_params['global_mean']
 
@@ -440,7 +482,10 @@ class Sampler:
         self.features["holiday"] = int(random.random() < (28 / 365))
 
     def sample_season(self):
-        self.features["season"] = random.choice(list(SEASON_MONTHS))
+        if self.use_historic is not None:
+            self.features["season"] = self.historic_row['SEASON'].item()
+        else:
+            self.features["season"] = random.choice(list(SEASON_MONTHS))
     
     def sample_household(self, n=100): 
         household_features, observed = self.household.sample_household_features(n)
@@ -452,6 +497,10 @@ class Sampler:
         self.features['general_health'] = sample_beta_observed(self.dfs["general_health"], 'General health (3 categories)', 'Good health', 'Not good health', observed['health_a'], observed['health_b'], 'Observation')
 
     def sample_features(self):  
+        if self.use_historic != None:
+            self.historic_row = self.historic_data.sample(1).copy()
+            print(' | '.join(f"{col}: {val}" for col, val in self.historic_row.iloc[0].items()))
+
         self.sample_season()
 
         self.sample_holiday()

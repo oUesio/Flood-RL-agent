@@ -4,26 +4,28 @@ from scipy.stats import gamma, lognorm
 from features import Sampler
 
 class Environment():
-    def __init__(self):
+    def __init__(self, use_historic=None):
         self.derived = {}
         self.impact = None
-        self.samples = Sampler()
+        self.samples = Sampler(use_historic) # None, "yellow", "amber", "red"
 
     # Calculate derived features
-    def physical_vul(self): # high physicial = high risk
+    def physical_vul(self): # high physical = high risk
         weights = {
             "elevation_ratio": 0.24,
             "impervious_ratio": 0.08,
+            "water_dist_ratio": 0.05,
             "water_dens_ratio": 0.12,
-            "transport_ratio": 0.06, # less than impervious, access routes
+            "transport_ratio": 0.06, # less than impervious since easier access
             "building_age_ratio": 0.10,
             "buildings_ratio": 0.10,
-            "soil_moisture_ratio": 0.07,
+            "soil_moisture_ratio": 0.07, # less than impervious since can still absorb water
         }
 
         features = {
             "elevation_ratio": np.log10(self.samples.features["elevation_ratio"]),
             "impervious_ratio": self.samples.features["impervious_ratio"],
+            "water_dist_ratio": self.samples.features["water_dist_ratio"],
             "water_dens_ratio": self.samples.features["water_dens_ratio"],
             "transport_ratio": self.samples.features["transport_ratio"],
             "building_age_ratio": self.samples.features["building_age_ratio"],
@@ -161,7 +163,7 @@ class Environment():
             "precipitation": self.samples.features['precipitation'], # millimetres
             "flood_depth": self.samples.features['depth'], # metres
             "season": self.samples.features['season'], # Spring, Summer, Autumn, Winter
-            "holiday": self.samples.features["holiday"], # Holidayflag
+            "holiday": self.samples.features["holiday"], # Holiday flag
             "soil_moisture": self.samples.features["soil_moisture"], # fraction
             # From data
             "water_density": self.samples.features["water_dens"], # fraction
