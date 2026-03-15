@@ -499,7 +499,7 @@ class Sampler:
     def sample_features(self):  
         if self.use_historic != None:
             self.historic_row = self.historic_data.sample(1).copy()
-            print(' | '.join(f"{col}: {val}" for col, val in self.historic_row.iloc[0].items()))
+            #print(' | '.join(f"{col}: {val}" for col, val in self.historic_row.iloc[0].items()))
 
         self.sample_season()
 
