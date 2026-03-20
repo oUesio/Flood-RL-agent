@@ -64,11 +64,6 @@ class Sampler:
             if f in ["water_dens", "water_dist"]:
                 self.grid_params[f+'_log_mean'] = np.log1p(self.dfs['grid'][f]).mean()
 
-            # For recording min and max
-            #if f in ["water_dist", "elevation", "popden"]:
-            #    print(f)
-            #    print(f"{f} min: {self.dfs['grid'][f].min()}, max: {self.dfs['grid'][f].max()}, ")
-
     def sample_cell(self):
         row = self.dfs['grid'].sample(1).iloc[0]
         for f in GRID_FEATURES:
@@ -116,6 +111,9 @@ class Sampler:
         road = self.features['road_dist_ratio']
         road_factor = 0.95 + 0.15 * (np.log1p(road) - np.log1p(self.grid_params['road_dist']))
         self.response_params['road_factor'] = np.clip(road_factor, 0.75, 1.1)
+        # For rescaling road factor with flood depth
+        self.response_params['base_road_factor'] = self.response_params['road_factor']
+
 
         self.features["geometry"] = row.geometry
         return row
@@ -136,6 +134,23 @@ class Sampler:
         else:
             depth = np.random.uniform(low, high)
         self.features["depth"] = depth
+
+    def update_flood_depth(self):
+        # Upward push
+        prec_influence = self.features['precipitation_norm']
+        absorption_resistance = self.features['impervious'] + (1 - self.features['impervious']) * self.features['soil_moisture']
+        push_factor = 0.05
+        push = prec_influence * absorption_resistance * push_factor
+
+        # Downward recession
+        # Proportional to current depth, deeper floods drain faster=
+        base_recession = 0.05
+        recession = self.features['depth'] * base_recession * self.features['water_dist_ratio']
+
+        # Positive delta = flooding worsening, negative = water receding
+        delta = push - recession
+        new_depth = np.clip(self.features['depth'] + delta, 0, 3.0)
+        self.features['depth'] = new_depth
 
     def init_mean_property(self):
         property_df = self.dfs["property_value"]
@@ -206,24 +221,31 @@ class Sampler:
                 self.response_params[season+'_'+category] = params
 
     def sample_emergency_response(self):
-        if self.use_historic is not None and pd.notna(self.historic_row["C2_count"].item()):
-            C2_count, C3_count, C2_mean, C3_mean = self.historic_row["C2_count"].item(), self.historic_row["C3_count"].item(), self.historic_row["C2_mean"].item(), self.historic_row["C3_mean"].item()
-            total = C2_count + C3_count
-            if random.random() < (C2_count / total):
-                category = 'C2'
-                response_sample = max(0, C2_mean * (1 + np.random.normal(0, 0.1)))  # scaled by noise
+        response_sample = 4.5 # Capped at 4.5 hours, Approximately max mean for C3 in the data
+        while response_sample >= 4.5:
+            if self.use_historic is not None and pd.notna(self.historic_row["C2_count"].item()):
+                C2_count, C3_count, C2_mean, C3_mean = self.historic_row["C2_count"].item(), self.historic_row["C3_count"].item(), self.historic_row["C2_mean"].item(), self.historic_row["C3_mean"].item()
+                total = C2_count + C3_count
+                if random.random() < (C2_count / total):
+                    category = 'C2'
+                    response_sample = max(0, C2_mean * (1 + np.random.normal(0, 0.1)))  # scaled by noise
+                else:
+                    category = 'C3'
+                    response_sample = max(0, C3_mean * (1 + np.random.normal(0, 0.1)))
+                    self.response_params['season_category'] = self.historic_row["SEASON"].item()+'_'+category
+                params = self.response_params[self.response_params['season_category']]
             else:
-                category = 'C3'
-                response_sample = max(0, C3_mean * (1 + np.random.normal(0, 0.1)))
-            params = self.response_params[self.historic_row["SEASON"].item()+'_'+category]
-        else:
-            category = np.random.choice( 
-                ["C2", "C3"],
-                p=self.response_params[self.features['season']],
-            )
-            params = self.response_params[self.features["season"]+'_'+category]
+                category = np.random.choice( 
+                    ["C2", "C3"],
+                    p=self.response_params[self.features['season']],
+                )
+                self.response_params['season_category'] = self.features["season"]+'_'+category
+                params = self.response_params[self.response_params['season_category']]
 
-            response_sample = lognorm.rvs(params['shape'], loc=params['loc'], scale=params['scale'])
+                response_sample = lognorm.rvs(params['shape'], loc=params['loc'], scale=params['scale'])
+
+        # Use for rescaling
+        self.features['response_time_raw'] = response_sample
 
         scaled_sample = response_sample * self.response_params['popden_factor'] * self.response_params['prec_factor'] * self.response_params['road_factor']
 
@@ -233,6 +255,20 @@ class Sampler:
 
         self.features["response_time_norm"] = ((scaled_sample - params['data_min']) / (params['data_max'] - params['data_min'])).clip(0, 1) # longer delays = more risk
     
+    def update_emergency_response(self):
+        # Update road factor
+        # Flood depth worsens road conditions on top of the base road distance factor
+        depth_norm = self.features['depth'] / 3.0
+        depth_road_weight = 0.2
+        updated_road_factor = self.response_params['base_road_factor'] + depth_road_weight * depth_norm
+        self.response_params['road_factor'] = np.clip(updated_road_factor, 0.75, 1.5)
+
+        params = self.response_params[self.response_params['season_category']]
+        scaled_sample = self.features['response_time_raw'] * self.response_params['prec_factor'] * self.response_params['road_factor'] * self.response_params['popden_factor']
+
+        self.features['response_time'] = scaled_sample
+        self.features["response_time_norm"] = ((scaled_sample - params['data_min']) / (params['data_max'] - params['data_min'])).clip(0, 1) # longer delays = more risk
+
     def init_ambulance_handover(self):
         handover = self.dfs["ambulance_handover"]
 
@@ -365,12 +401,6 @@ class Sampler:
         prec = self.dfs["precipitation"]
         prec["time"] = pd.to_datetime(prec["time"])
 
-        # For recording min and max
-        #all_rainfall = prec["rainfall"]
-        #self.prec_params['min'] = float(all_rainfall.min())
-        #self.prec_params['max'] = float(all_rainfall.max())
-        #print(f"Precipitation min: {self.prec_params['min']}, max: {self.prec_params['max']}") 
-
         for season in list(SEASON_MONTHS):
             params = {}
             rainfall = prec.loc[
@@ -400,11 +430,28 @@ class Sampler:
 
         self.features['precipitation_norm'] = np.clip(log_prec / log_max, 0, 1)
 
+    def update_precipitation(self):
+        params = self.prec_params[self.features["season"]]
+        
+        # Sample delta from normal distribution of scale 2mm
+        delta = np.random.normal(loc=0, scale=2.0)
+        new_prec = self.features['precipitation'] + delta
+        new_prec = np.clip(new_prec, 0, params['non_zero_max'])
+        
+        self.features['precipitation'] = new_prec
+
+        log_prec = np.log1p(self.features['precipitation'])
+        log_max = np.log1p(params['non_zero_max'])
+
+        scaled = log_prec / log_max
+        self.response_params['prec_factor'] = 0.95 + 0.25 * scaled
+        self.features['precipitation_norm'] = np.clip(scaled, 0, 1)
+
     def init_soil_moisture(self):
         # Load soil moisture rasters
         tiff_files = sorted(glob.glob(os.path.join(FILE_PATHS_DIR['soil_moisture_dir'], "*.tif")))
 
-        all_values = []
+        #all_values = []
         for season in list(SEASON_MONTHS):
             season_tiffs = []
             for f in tiff_files:
@@ -428,10 +475,10 @@ class Sampler:
                         stack.append(data)
 
             params['stack'] = np.stack(stack, axis=0)  # shape: (time, rows, cols)
-            all_values.append(np.nanmean(params['stack']))
+            #all_values.append(np.nanmean(params['stack']))
             self.soil_params[season] = params
 
-        self.soil_params['global_mean'] = np.mean(all_values)
+        #self.soil_params['global_mean'] = np.mean(all_values)
 
     def sample_soil_moisture(self):
         if self.use_historic is not None and pd.notna(self.historic_row["SOIL_MOISTURE_PATH"].item()):
@@ -467,7 +514,26 @@ class Sampler:
             soil_sample = norm.rvs(mu, sigma)
             
         self.features['soil_moisture'] = soil_sample
-        self.features['soil_moisture_ratio'] = soil_sample / self.soil_params['global_mean']
+        #self.features['soil_moisture_ratio'] = soil_sample / self.soil_params['global_mean']
+
+    def update_soil_moisture(self):
+        prec_influence = self.features['precipitation_norm']
+        # Normalise flood depth using max possible depth (3.0m)
+        depth_influence = self.features['depth'] / 3.0
+
+        # Combined push
+        prec_weight = 0.02
+        depth_weight = 0.05 
+        push = prec_weight * prec_influence + depth_weight * depth_influence
+
+        # Constant natural drainage between time steps
+        drain = 0.01
+
+        delta = push - drain
+        new_soil = np.clip(self.features['soil_moisture'] + delta, 0, 1)
+
+        self.features['soil_moisture'] = new_soil
+        #self.features['soil_moisture_ratio'] = new_soil / self.soil_params['global_mean']
 
     def init_english_proficiency(self):
         self.dfs["english_proficiency"]['Proficiency_Group'] = self.dfs["english_proficiency"]['Proficiency in English language (4 categories)'].apply(map_proficiency)
@@ -496,10 +562,15 @@ class Sampler:
         self.features['disabled'] = sample_beta_observed(self.dfs["disabled"], 'Disability (3 categories)', 'Disabled under the Equality Act', 'Not disabled under the Equality Act', observed['disable_a'], observed['disable_b'], 'Observation')
         self.features['general_health'] = sample_beta_observed(self.dfs["general_health"], 'General health (3 categories)', 'Good health', 'Not good health', observed['health_a'], observed['health_b'], 'Observation')
 
+    def update(self):
+        self.update_precipitation()
+        self.update_soil_moisture()
+        self.update_flood_depth()
+        self.update_emergency_response()
+
     def sample_features(self):  
         if self.use_historic != None:
             self.historic_row = self.historic_data.sample(1).copy()
-            #print(' | '.join(f"{col}: {val}" for col, val in self.historic_row.iloc[0].items()))
 
         self.sample_season()
 

@@ -8,18 +8,19 @@ class Environment():
         self.derived = {}
         self.impact = None
         self.samples = Sampler(use_historic) # None, "yellow", "amber", "red"
+        self.warning_issued = 0 # 0 (No), 1 (yellow), 2 (amber), 3 (red)
 
     # Calculate derived features
     def physical_vul(self): # high physical = high risk
         weights = {
             "elevation_ratio": 0.24,
             "impervious_ratio": 0.08,
-            "water_dist_ratio": 0.05,
+            "water_dist_ratio": 0.06,
             "water_dens_ratio": 0.12,
             "transport_ratio": 0.06, # less than impervious since easier access
             "building_age_ratio": 0.10,
             "buildings_ratio": 0.10,
-            "soil_moisture_ratio": 0.07, # less than impervious since can still absorb water
+            #"soil_moisture_ratio": 0.07, # less than impervious since can still absorb water
         }
 
         features = {
@@ -30,7 +31,7 @@ class Environment():
             "transport_ratio": self.samples.features["transport_ratio"],
             "building_age_ratio": self.samples.features["building_age_ratio"],
             "buildings_ratio": self.samples.features["buildings_ratio"],
-            "soil_moisture_ratio": self.samples.features["soil_moisture_ratio"],
+            #"soil_moisture_ratio": self.samples.features["soil_moisture_ratio"],
         }
 
         total_weight = sum(weights.values())
@@ -90,10 +91,10 @@ class Environment():
         }
 
         total_weight = sum(weights.values())
-        #warning_factor = 1.4 if self.warning_issued else 1
+        warning_factor = 1 + 0.1 * self.warning_issued # higher warning issued, more prepared
 
         self.derived["preparedness"] = np.clip((
-            (sum(weights[k] * features[k] for k in weights) / total_weight) #* warning_factor
+            (sum(weights[k] * features[k] for k in weights) / total_weight) * warning_factor
         ), 0, 1)
 
     def recovery(self): # high recovery = lower risk
@@ -148,7 +149,15 @@ class Environment():
 
     def sample_features(self):
         self.samples.sample_features()
-    
+
+    def update_warning(self, warning):
+        # Used when rl agent makes choice to issue
+        self.warning_issued = warning
+
+    def update_features(self):
+        self.samples.update()
+        self.update_derived()
+
     def update_derived(self):
         self.physical_vul()
         self.socioeconomic_vul()
