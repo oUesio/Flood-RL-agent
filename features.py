@@ -553,7 +553,7 @@ class Sampler:
         else:
             self.features["season"] = random.choice(list(SEASON_MONTHS))
     
-    def sample_household(self, n=100): 
+    def sample_household(self, n=50): 
         household_features, observed = self.household.sample_household_features(n)
         self.features |= household_features
         return observed
