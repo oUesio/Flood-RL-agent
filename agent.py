@@ -34,7 +34,7 @@ Population density (of an area)
 
 N_FEATURES = 18
 SEASON_TO_IDX = {"Spring": 0, "Summer": 1, "Autumn": 2, "Winter": 3}
-MAX_STEPS = 10  # number of timesteps per episode
+MAX_STEPS = 200  # number of timesteps per episode
 
 IMPACT_THRESHOLDS = {
     "none":   0.0447,
