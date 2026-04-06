@@ -2,7 +2,7 @@ import numpy as np
 
 class RandomAgent:
     def __init__(self):
-        # Based on class distribution: 355571, 102618, 38134, 3677
+        # Values from historical distribution of warnings
         total = 6935
         self.probs = [
             4993 / total,  # none
@@ -11,12 +11,5 @@ class RandomAgent:
             20 / total,    # red
         ]
 
-    def predict(self, obs: dict) -> int:
+    def predict(self):
         return np.random.choice([0, 1, 2, 3], p=self.probs)
-
-'''
-agent = RandomAgent(y)
-obs = environment.get_observable_features()
-warning = agent.predict(obs)
-print(f"Issued warning level: {warning}")
-'''
