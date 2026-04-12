@@ -1,6 +1,5 @@
 
 import numpy as np
-from scipy.stats import gamma, lognorm
 from features import Sampler
 
 class Environment():

@@ -1,10 +1,7 @@
 from environment import Environment
-from collections import defaultdict
-import pandas as pd
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import json
 import math
 
 '''
@@ -43,7 +40,7 @@ IMPACT_THRESHOLDS = {
 }
 
 class FloodWarningEnv(gym.Env):
-    def __init__(self, false_weight=0.3, missed_weight=2, jump_weight=0.5):
+    def __init__(self, false_weight, missed_weight, jump_weight):
         super().__init__()
         self.env = Environment()
         self.action_space = spaces.Discrete(4)  # 0=none, 1=yellow, 2=amber, 3=red
