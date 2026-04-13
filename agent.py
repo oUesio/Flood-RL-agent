@@ -4,34 +4,9 @@ from gymnasium import spaces
 import numpy as np
 import math
 
-'''
-PPO
-
-Observable features in real life:
-Precipitation (mm)
-Flood depth (m)
-Season 
-Soil moisture (percent or fraction)
-
-Observable features estimable from public data:
-Water density (fraction)
-Water distance (m)
-Elevation (m)
-Impervious surface (fraction)
-Historic flood flag (binary)
-Deprivation index (1-10 normalised to 0-1)
-Residential (fraction)
-Commercial (fraction)
-Industrial (fraction)
-Agriculture (fraction)
-Transport (fraction)
-Population density (of an area)
-
-'''
-
 N_FEATURES = 18
 SEASON_TO_IDX = {"Spring": 0, "Summer": 1, "Autumn": 2, "Winter": 3}
-MAX_STEPS = 200  # number of timesteps per episode
+MAX_STEPS = 200
 
 IMPACT_THRESHOLDS = {
     "none":   0.0447,
@@ -39,11 +14,13 @@ IMPACT_THRESHOLDS = {
     "amber":  0.1657,
 }
 
+MAX_RESAMPLE_ATTEMPTS = 100  # avoid infinite loop if severe events are very rare
+
 class FloodWarningEnv(gym.Env):
-    def __init__(self, false_weight, missed_weight, jump_weight):
+    def __init__(self, false_weight=1.5, missed_weight=2, jump_weight=0.5, severe_prob=0.0):
         super().__init__()
         self.env = Environment()
-        self.action_space = spaces.Discrete(4)  # 0=none, 1=yellow, 2=amber, 3=red
+        self.action_space = spaces.Discrete(4)
         self.observation_space = spaces.Box(low=0, high=1, shape=(N_FEATURES,), dtype=np.float32)
         self.prev_action = 0
         self.current_step = 0
@@ -53,17 +30,34 @@ class FloodWarningEnv(gym.Env):
         self.missed_weight = missed_weight
         self.jump_weight = jump_weight
 
-    def step(self, action):
-        # Apply warning to environment so preparedness is affected
-        self.env.update_warning(action)
+        # Curriculum learning
+        self.severe_prob = severe_prob  # probability of forcing a severe starting condition
 
+    def set_severe_prob(self, prob):
+        # Called externally by curriculum callback to decay severe_prob over training
+        self.severe_prob = np.clip(prob, 0.0, 1.0)
+
+    def _sample_features(self):
+        if np.random.random() < self.severe_prob:
+            # Force a severe starting condition (amber or red)
+            for _ in range(MAX_RESAMPLE_ATTEMPTS):
+                self.env.sample_features()
+                self.env.update_derived()
+                if self.env.impact > IMPACT_THRESHOLDS["amber"]:
+                    return
+            # Fallback to normal sample if no severe found within attempts
+            self.env.sample_features()
+            self.env.update_derived()
+        else:
+            self.env.sample_features()
+            self.env.update_derived()
+
+    def step(self, action):
+        self.env.update_warning(action)
         reward = self._get_reward(action)
         self.prev_action = action
         self.current_step += 1
-
-        # Evolve dynamic features and recompute impact
         self.env.update_features()
-
         terminated = False
         truncated = self.current_step >= MAX_STEPS
         obs = self._get_obs()
@@ -71,15 +65,13 @@ class FloodWarningEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.env.sample_features()
-        self.env.update_derived()
+        self._sample_features()  # uses curriculum logic
         self.prev_action = 0
         self.current_step = 0
         return self._get_obs(), {}
 
     def _get_obs(self):
         f = self.env.get_observable_features()
-
         idx = SEASON_TO_IDX[f["season"]]
         season_sin = math.sin(2 * math.pi * idx / 4)
         season_cos = math.cos(2 * math.pi * idx / 4)
@@ -106,13 +98,13 @@ class FloodWarningEnv(gym.Env):
 
     def _get_impact_level(self, impact):
         if impact < IMPACT_THRESHOLDS["none"]:
-            return 0  # no warning
+            return 0
         elif impact < IMPACT_THRESHOLDS["yellow"]:
-            return 1  # yellow
+            return 1
         elif impact < IMPACT_THRESHOLDS["amber"]:
-            return 2  # amber
+            return 2
         else:
-            return 3  # red
+            return 3
 
     def _get_reward(self, action):
         impact_level = self._get_impact_level(self.env.impact)
@@ -120,7 +112,5 @@ class FloodWarningEnv(gym.Env):
         alignment = 1.0 if action == impact_level else 0.0
         false_alarm = self.false_weight * action * max(0, action - impact_level)
         missed = self.missed_weight * impact_level * max(0, impact_level - action)
-        jump = self.jump_weight * max(0, (action - self.prev_action) - 1)  # now meaningful across timesteps
-
+        jump = self.jump_weight * max(0, (action - self.prev_action) - 1)
         return alignment - false_alarm - missed - jump
-
