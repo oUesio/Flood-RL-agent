@@ -14,7 +14,7 @@ IMPACT_THRESHOLDS = {
     "amber":  0.1657,
 }
 
-MAX_RESAMPLE_ATTEMPTS = 100  # avoid infinite loop if severe events are very rare
+MAX_RESAMPLE_ATTEMPTS = 10000  # avoid infinite loop
 
 class FloodWarningEnv(gym.Env):
     def __init__(self, false_weight=1.5, missed_weight=2, jump_weight=0.5, severe_prob=0.0):
@@ -43,7 +43,7 @@ class FloodWarningEnv(gym.Env):
             for _ in range(MAX_RESAMPLE_ATTEMPTS):
                 self.env.sample_features()
                 self.env.update_derived()
-                if self.env.impact > IMPACT_THRESHOLDS["amber"]:
+                if self.env.impact > IMPACT_THRESHOLDS["yellow"]:
                     return
             # Fallback to normal sample if no severe found within attempts
             self.env.sample_features()
