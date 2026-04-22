@@ -9,15 +9,15 @@ SEASON_TO_IDX = {"Spring": 0, "Summer": 1, "Autumn": 2, "Winter": 3}
 MAX_STEPS = 200
 
 IMPACT_THRESHOLDS = {
-    "none":   0.0447,
-    "yellow": 0.0673,
-    "amber":  0.1657,
+    "none":   0.0456,
+    "yellow": 0.0725,
+    "amber":  0.2345,
 }
 
 MAX_RESAMPLE_ATTEMPTS = 10000  # avoid infinite loop
 
 class FloodWarningEnv(gym.Env):
-    def __init__(self, false_weight=1.5, missed_weight=2, jump_weight=0.5, severe_prob=0.0):
+    def __init__(self, false_weight=1.5, missed_weight=2.0, jump_weight=0.5, severe_prob=0.0): # missed weight initially 2 
         super().__init__()
         self.env = Environment()
         self.action_space = spaces.Discrete(4)
