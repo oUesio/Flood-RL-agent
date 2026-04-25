@@ -42,13 +42,12 @@ A deep reinforcement learning agent that learns to issue flood warnings (None, Y
 ---
 ## Environment
 
-| Property | Value |
-|---|---|
-| Observation space | 18 continuous features, normalised to [0, 1] |
-| Action space | 4 discrete actions (0 = None, 1 = Yellow, 2 = Amber, 3 = Red) |
-| Episode length | 200 steps (truncation) |
+**Action space:**
+4 discrete actions (0 = None, 1 = Yellow, 2 = Amber, 3 = Red)
 
 **Observation features:**
+
+18 continuous features, normalised to [0, 1]:
 - *Physical*: precipitation, flood depth, elevation, impervious surface fraction, water distance/density
 - *Environmental*: season (sin/cos), soil moisture, historical flood flag
 - *Socioeconomic*: deprivation index, land use fractions (residential/commercial/industrial/agriculture/transport), population density
