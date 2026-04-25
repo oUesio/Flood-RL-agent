@@ -4,17 +4,12 @@ A deep reinforcement learning agent that learns to issue flood warnings (None, Y
 
 ---
 
-## Overview
+## Key Features
 
-Deciding when and at what level to issue a flood warning involves balancing two competing costs: the social and economic harm of missed warnings versus the credibility cost of unnecessary ones. This project frames that decision as a discrete-action RL problem and trains an LSTM-based policy to outperform rule-based baselines.
-
-**Key features:**
-- Gymnasium environment simulating flood dynamics over 200-step episodes
-- 18-dimensional observation space drawn from real geospatial, demographic, and meteorological data
-- Vulnerability scoring that combines physical, socioeconomic, preparedness, recovery, and exposure factors
-- Curriculum learning via `severe_prob` to expose the agent to high-impact events early in training
-- Hyperparameter optimisation with Optuna (100+ trials)
-- Comparison against random and decision-tree threshold baselines
+- **Environment** — Gymnasium-based flood simulation over 200-step episodes
+- **Observations** — 18 features from real geospatial, demographic, and meteorological data
+- **Impact Scoring** — Combines physical, socioeconomic, preparedness, recovery, and exposure factors
+- **Baselines** — Random policy and decision-tree threshold policy
 
 ---
 ## Setup
