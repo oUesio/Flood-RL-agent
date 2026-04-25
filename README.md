@@ -43,6 +43,7 @@ A deep reinforcement learning agent that learns to issue flood warnings (None, Y
 ## Environment
 
 **Action space:**
+
 4 discrete actions (0 = None, 1 = Yellow, 2 = Amber, 3 = Red)
 
 **Observation features:**
