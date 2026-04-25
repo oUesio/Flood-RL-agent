@@ -6,10 +6,10 @@ A deep reinforcement learning agent that learns to issue flood warnings (None, Y
 
 ## Key Features
 
-- **Environment** — Gymnasium-based flood simulation over 200-step episodes
-- **Observations** — 18 features from real geospatial, demographic, and meteorological data
-- **Impact Scoring** — Combines physical, socioeconomic, preparedness, recovery, and exposure factors
-- **Baselines** — Random policy and decision-tree threshold policy
+- **Environment** - Gymnasium-based flood simulation over 200-step episodes
+- **Observations** - 18 features from real geospatial, demographic, and meteorological data
+- **Impact Scoring** - Combines physical, socioeconomic, preparedness, recovery, and exposure factors
+- **Baselines** - Random policy and decision-tree threshold policy
 
 ---
 ## Setup
