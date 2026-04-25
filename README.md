@@ -12,15 +12,6 @@ A deep reinforcement learning agent that learns to issue flood warnings (None, Y
 - **Baselines** - Random policy and decision-tree threshold policy
 
 ---
-## Setup
-
-```bash
-pip install -r requirements.txt
-```
-Python 3.10+ recommended.
-
-
----
 
 ## Project Structure
 
@@ -48,19 +39,6 @@ Python 3.10+ recommended.
 ├── models/               # Saved RecurrentPPO agents from training
 └── results/              # Evaluation plots and figures
 ```
-
----
-
-## Training
-
-Open [`train.ipynb`](train.ipynb) or [`train_vecnorm.ipynb`](train_vecnorm.ipynb) to run Optuna hyperparameter search followed by final model training. Trained models are saved to their respective directories (`models/lstm/` or `models/lstm_vecnorm/`).
-
----
-
-## Evaluation
-
-Open [`evaluation.ipynb`](evaluation.ipynb) to evaluate the RL agents alongside the random and threshold baselines. Results are saved to `results/evaluation_results.csv` and plots to `results/`.
-
 ---
 ## Environment
 
@@ -84,3 +62,24 @@ reward = alignment − false_alarm_penalty − missed_penalty − jump_penalty
 - `false_alarm_penalty = 1.5 × action × max(0, action − impact)`
 - `missed_penalty = 2.0 × impact × max(0, impact − action)`
 - `jump_penalty = 0.5 × max(0, Δaction − 1)` (penalises rapid escalation)
+
+---
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+Python 3.10+ recommended.
+
+---
+
+## Training
+
+Open [`train.ipynb`](train.ipynb) or [`train_vecnorm.ipynb`](train_vecnorm.ipynb) to run Optuna hyperparameter search followed by final model training. Trained models are saved to their respective directories (`models/lstm/` or `models/lstm_vecnorm/`).
+
+---
+
+## Evaluation
+
+Open [`evaluation.ipynb`](evaluation.ipynb) to evaluate the RL agents alongside the random and threshold baselines. Results are saved to `results/evaluation_results.csv` and plots to `results/`.
+
