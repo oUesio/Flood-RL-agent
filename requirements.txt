@@ -16,3 +16,6 @@ Shapely==2.1.2
 stable_baselines3==2.7.1
 torch==2.10.0
 tqdm==4.67.3
+kaleido==1.2.0
+nbformat==5.10.4
+plotly==6.7.0
